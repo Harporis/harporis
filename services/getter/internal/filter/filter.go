@@ -1,6 +1,7 @@
 package filter
 
 import (
+	"bytes"
 	"path/filepath"
 	"strings"
 )
@@ -50,4 +51,11 @@ func IsBinaryExtension(path string, set map[string]struct{}) bool {
 	}
 	_, ok := set[ext]
 	return ok
+}
+
+// HasNULByte reports whether sample contains a NUL byte. The typical
+// caller passes the first 8 KiB of a blob — git's own heuristic for
+// binary detection.
+func HasNULByte(sample []byte) bool {
+	return bytes.IndexByte(sample, 0) >= 0
 }

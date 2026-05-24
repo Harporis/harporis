@@ -46,3 +46,22 @@ func TestIsBinaryExtension(t *testing.T) {
 		})
 	}
 }
+
+func TestHasNULByte(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"plain text", []byte("hello world\nline 2\n"), false},
+		{"UTF-8 multibyte", []byte("привет\n"), false},
+		{"contains NUL", []byte("text\x00more"), true},
+		{"empty", []byte{}, false},
+		{"only NUL", []byte{0}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, HasNULByte(tc.data))
+		})
+	}
+}
