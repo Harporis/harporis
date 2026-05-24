@@ -51,7 +51,11 @@ func (p *Publisher) publishWithRetry(ctx context.Context, subject string, data [
 			return nil
 		}
 		lastErr = err
-		time.Sleep(backoff[i])
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff[i]):
+		}
 	}
 	return fmt.Errorf("publish %s after retries: %w", subject, lastErr)
 }
