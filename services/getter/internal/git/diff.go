@@ -40,6 +40,12 @@ var (
 )
 
 // ParseUnifiedDiff parses output of `git diff -U<N>` into per-file patches.
+//
+// MVP scope: removed lines (lines prefixed with `-`) are intentionally
+// discarded. Secret scanning only inspects added and context lines because
+// removed text cannot introduce new secrets. Consumers that need the full
+// patch (e.g. compliance audits of deleted content) should not use this
+// parser — extend it to populate Hunk.Lines for `-` ops and track OldLine.
 func ParseUnifiedDiff(input []byte) ([]Patch, error) {
 	var patches []Patch
 	var cur *Patch
