@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -126,7 +128,7 @@ func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Regis
 			WalkMode:           walkModeFromProto(req.Type),
 			Branch:             req.Range.GetBranch(),
 			BaseBranch:         req.Range.GetBaseBranch(),
-			Filter:             buildFilter(cfg),
+			Filter:             buildFilter(cfg, repoDir),
 			Publisher:          pub,
 			RowSizeTargetBytes: cfg.Chunking.RowSizeTargetKB * 1024,
 			OverlapLines:       cfg.Chunking.RowOverlapLines,
@@ -138,12 +140,31 @@ func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Regis
 	}
 }
 
-func buildFilter(cfg *config.Config) *filter.Filter {
+func buildFilter(cfg *config.Config, repoDir string) *filter.Filter {
 	return &filter.Filter{
 		PathExclusions:   cfg.Filters.PathExclusions,
 		BinaryExtensions: filter.BuildExtensionSet(cfg.Filters.BinaryExtensions),
 		MaxFileSize:      int64(cfg.Chunking.MaxFileSizeMB) * 1024 * 1024,
+		GitAttrs:         loadGitAttributes(repoDir),
 	}
+}
+
+func loadGitAttributes(repoDir string) *filter.GitAttributes {
+	path := filepath.Join(repoDir, ".gitattributes")
+	f, err := os.Open(path)
+	if err != nil {
+		// No .gitattributes is normal; absence => no rules.
+		empty, _ := filter.ParseGitAttributes(strings.NewReader(""))
+		return empty
+	}
+	defer f.Close()
+	attrs, err := filter.ParseGitAttributes(f)
+	if err != nil {
+		slog.Warn("parse .gitattributes failed; ignoring", "path", path, "err", err)
+		empty, _ := filter.ParseGitAttributes(strings.NewReader(""))
+		return empty
+	}
+	return attrs
 }
 
 func sourceFromProto(s *v1.Source) git.Source {
