@@ -1,6 +1,7 @@
 package filter
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -64,4 +65,40 @@ func TestHasNULByte(t *testing.T) {
 			require.Equal(t, tc.want, HasNULByte(tc.data))
 		})
 	}
+}
+
+func TestShouldScan_Layered(t *testing.T) {
+	flt := &Filter{
+		PathExclusions:   []string{".git/", "node_modules/"},
+		BinaryExtensions: BuildExtensionSet([]string{".png", ".jpg"}),
+		MaxFileSize:      int64(10 * 1024 * 1024),
+		GitAttrs:         emptyAttrs(t),
+	}
+	cases := []struct {
+		name       string
+		path       string
+		size       int64
+		sample     []byte
+		wantOK     bool
+		wantReason SkipReason
+	}{
+		{"text source file", "src/main.go", 200, []byte("package main\n"), true, ""},
+		{"excluded path", ".git/HEAD", 50, []byte("ref:"), false, ReasonPathExcluded},
+		{"binary extension", "img.png", 100, []byte("\x89PNG"), false, ReasonBinaryExtension},
+		{"too big", "big.txt", 11 * 1024 * 1024, []byte("hi"), false, ReasonSizeCap},
+		{"NUL byte", "weird.txt", 50, []byte("text\x00bytes"), false, ReasonNULByte},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, reason := flt.ShouldScan(tc.path, tc.size, tc.sample)
+			require.Equal(t, tc.wantOK, ok)
+			require.Equal(t, tc.wantReason, reason)
+		})
+	}
+}
+
+func emptyAttrs(t *testing.T) *GitAttributes {
+	a, err := ParseGitAttributes(strings.NewReader(""))
+	require.NoError(t, err)
+	return a
 }

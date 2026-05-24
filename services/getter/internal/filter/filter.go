@@ -59,3 +59,50 @@ func IsBinaryExtension(path string, set map[string]struct{}) bool {
 func HasNULByte(sample []byte) bool {
 	return bytes.IndexByte(sample, 0) >= 0
 }
+
+// SkipReason is a label written to metrics when a file is excluded.
+type SkipReason string
+
+const (
+	ReasonPathExcluded        SkipReason = "path_excluded"
+	ReasonBinaryExtension     SkipReason = "binary_extension"
+	ReasonSizeCap             SkipReason = "size_cap"
+	ReasonGitAttributesBinary SkipReason = "gitattributes_binary"
+	ReasonNULByte             SkipReason = "nul_byte"
+)
+
+// Filter encapsulates the 5-layer file filter configuration.
+type Filter struct {
+	PathExclusions   []string
+	BinaryExtensions map[string]struct{}
+	MaxFileSize      int64
+	GitAttrs         *GitAttributes
+}
+
+// ShouldScan applies the 5-layer filter in order:
+//  1. Path glob exclusion (zero I/O)
+//  2. Extension blacklist
+//  3. Size cap
+//  4. .gitattributes binary
+//  5. NUL-byte sniff
+//
+// sample should be the first ~8 KiB of the blob; it is only inspected if
+// the prior four checks pass. Pass nil to defer the NUL-byte check.
+func (f *Filter) ShouldScan(path string, size int64, sample []byte) (bool, SkipReason) {
+	if MatchAnyGlob(path, f.PathExclusions) {
+		return false, ReasonPathExcluded
+	}
+	if IsBinaryExtension(path, f.BinaryExtensions) {
+		return false, ReasonBinaryExtension
+	}
+	if size > f.MaxFileSize {
+		return false, ReasonSizeCap
+	}
+	if f.GitAttrs != nil && f.GitAttrs.IsBinary(path) {
+		return false, ReasonGitAttributesBinary
+	}
+	if sample != nil && HasNULByte(sample) {
+		return false, ReasonNULByte
+	}
+	return true, ""
+}
