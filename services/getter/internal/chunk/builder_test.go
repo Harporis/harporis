@@ -91,3 +91,60 @@ func TestBuilder_EmptyFinish(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, chunks) // empty file: no chunks emitted
 }
+
+func TestBuilder_MultilineSecretAlwaysCaughtInOneChunk(t *testing.T) {
+	// Simulate a PEM block straddling chunk boundaries. The builder must
+	// guarantee that, for any multi-line secret of length <= OverlapLines+1,
+	// at least one chunk contains the FULL secret as a contiguous slice.
+	const overlap = 4
+
+	// Build a "file" of 30 short lines, with a 5-line PEM somewhere inside.
+	lines := make([]string, 0, 30)
+	for i := 0; i < 12; i++ {
+		lines = append(lines, "before line")
+	}
+	pem := []string{
+		"-----BEGIN PRIVATE KEY-----",
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"CCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+		"-----END PRIVATE KEY-----",
+	}
+	lines = append(lines, pem...)
+	for i := 0; i < 13; i++ {
+		lines = append(lines, "after line")
+	}
+
+	// Small RowSize forces multiple chunks.
+	b := NewBuilder(BuilderConfig{
+		RowSizeTargetBytes: 80,
+		OverlapLines:       overlap,
+	})
+	b.Begin(BlobSource([]byte("sha"), nil))
+	off := int64(0)
+	for i, l := range lines {
+		require.NoError(t, b.AddLine(int32(i+1), off, []byte(l)))
+		off += int64(len(l) + 1)
+	}
+	chunks, err := b.Finish()
+	require.NoError(t, err)
+
+	// Some chunk must contain the entire PEM (5 lines) contiguously.
+	found := false
+	for _, ch := range chunks {
+		joined := joinRows(ch.Rows)
+		if strings.Contains(joined, strings.Join(pem, "\n")) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected at least one chunk to contain the complete PEM block")
+}
+
+func joinRows(rows []*v1.GitRow) string {
+	parts := make([]string, len(rows))
+	for i, r := range rows {
+		parts[i] = string(r.Content)
+	}
+	return strings.Join(parts, "\n")
+}
