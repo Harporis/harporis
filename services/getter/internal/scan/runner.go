@@ -176,9 +176,80 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 	return nil
 }
 
-// runDiff handles BRANCH_DIFF / HEAD_DIFF / STAGED — wired in Task 29.
+// runDiff handles BRANCH_DIFF / HEAD_DIFF / STAGED.
 func (r *Runner) runDiff(ctx context.Context) error {
-	return fmt.Errorf("diff mode %q not yet implemented", r.cfg.WalkMode)
+	var extra []string
+	switch r.cfg.WalkMode {
+	case "branch_diff":
+		if r.cfg.BaseBranch == "" || r.cfg.Branch == "" {
+			return fmt.Errorf("branch_diff requires Branch and BaseBranch")
+		}
+		extra = []string{fmt.Sprintf("%s..%s", r.cfg.BaseBranch, r.cfg.Branch)}
+	case "head_diff":
+		// unstaged: no extra args
+	case "staged":
+		extra = []string{"--cached"}
+	default:
+		return fmt.Errorf("unknown diff mode %q", r.cfg.WalkMode)
+	}
+	raw, err := git.RunDiff(ctx, r.cfg.RepoDir, r.cfg.DiffContextLines, extra...)
+	if err != nil {
+		return fmt.Errorf("git diff: %w", err)
+	}
+	patches, err := git.ParseUnifiedDiff(raw)
+	if err != nil {
+		return err
+	}
+	for _, p := range patches {
+		if p.Deleted {
+			continue
+		}
+		ok, _ := r.cfg.Filter.ShouldScan(p.Path, 0, nil)
+		if !ok {
+			r.scanCtx.BlobsSkipped.Add(1)
+			continue
+		}
+		if err := r.publishDiffPatch(ctx, p); err != nil {
+			r.scanCtx.Errors.Add(1)
+		} else {
+			r.scanCtx.BlobsScanned.Add(1)
+		}
+	}
+	return nil
+}
+
+func (r *Runner) publishDiffPatch(ctx context.Context, p git.Patch) error {
+	// MVP: use a placeholder "HEAD" sentinel as the commit SHA bytes.
+	// Real HEAD resolution (git rev-parse HEAD) is deferred — see concerns.
+	commitSHA := []byte("HEAD")
+	for _, h := range p.Hunks {
+		builder := chunk.NewBuilder(chunk.BuilderConfig{
+			ScanID:             r.cfg.ScanID,
+			RowSizeTargetBytes: r.cfg.RowSizeTargetBytes,
+			OverlapLines:       r.cfg.OverlapLines,
+		})
+		builder.Begin(chunk.DiffWindowSource(commitSHA, p.Path,
+			int32(r.cfg.DiffContextLines), int32(r.cfg.DiffContextLines)))
+		for _, line := range h.Lines {
+			if line.Op == '-' {
+				continue // dropped lines aren't in the new file
+			}
+			if err := builder.AddLine(line.NewLine, 0, []byte(line.Text)); err != nil {
+				return err
+			}
+		}
+		chunks, err := builder.Finish()
+		if err != nil {
+			return err
+		}
+		for _, c := range chunks {
+			c.SequenceNumber = r.scanCtx.ChunksPublished.Add(1) - 1
+			if err := r.cfg.Publisher.PublishChunk(ctx, c); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *Runner) finishWith(state v1.ScanState, runErr error) error {

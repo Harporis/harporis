@@ -77,3 +77,38 @@ func TestRunner_CurrentState_EndToEnd(t *testing.T) {
 	require.Equal(t, v1.ScanState_RUNNING, pub.statuses[0].State)
 	require.Equal(t, v1.ScanState_COMPLETED, pub.statuses[len(pub.statuses)-1].State)
 }
+
+func TestRunner_StagedDiff(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a.go", "package main\n")
+	r.Commit("base")
+	r.Write("a.go", "package main\n// SECRET=AKIAEXAMPLE\nfunc main(){}\n")
+	r.Run("add", "a.go") // stage but don't commit
+
+	pub := &fakePublisher{}
+	flt := &filter.Filter{
+		PathExclusions:   []string{".git/"},
+		BinaryExtensions: map[string]struct{}{},
+		MaxFileSize:      int64(10 * 1024 * 1024),
+	}
+	runner := NewRunner(RunnerConfig{
+		ScanID:             "scan-diff-1",
+		RepoDir:            r.Dir,
+		WalkMode:           "staged",
+		Filter:             flt,
+		Publisher:          pub,
+		RowSizeTargetBytes: 4096,
+		DiffContextLines:   30,
+		Workers:            1,
+	})
+	require.NoError(t, runner.Run(context.Background()))
+
+	require.GreaterOrEqual(t, len(pub.chunks), 1)
+	hadDiff := false
+	for _, c := range pub.chunks {
+		if c.Kind == v1.ChunkKind_DIFF_WINDOW && c.FilePath == "a.go" {
+			hadDiff = true
+		}
+	}
+	require.True(t, hadDiff, "expected DIFF_WINDOW chunk for staged change in a.go")
+}
