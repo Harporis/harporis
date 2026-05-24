@@ -44,5 +44,14 @@ func Validate(c *Config) error {
 	if c.NATS.Consumer.QueueGroup == "" {
 		errs = append(errs, errors.New("nats.consumer.queue_group: must not be empty"))
 	}
+	if c.NATS.Consumer.RequestAckWaitSeconds < 5 {
+		errs = append(errs, fmt.Errorf("nats.consumer.request_ack_wait_seconds: must be >= 5 (got %d)", c.NATS.Consumer.RequestAckWaitSeconds))
+	}
+	if c.NATS.JetStream.PublishAckWaitSeconds < 1 {
+		errs = append(errs, fmt.Errorf("nats.jetstream.publish_ack_wait_seconds: must be >= 1 (got %d)", c.NATS.JetStream.PublishAckWaitSeconds))
+	}
+	if c.NATS.Consumer.MaxInFlightScans < 1 {
+		errs = append(errs, fmt.Errorf("nats.consumer.max_in_flight_scans: must be >= 1 (got %d)", c.NATS.Consumer.MaxInFlightScans))
+	}
 	return errors.Join(errs...)
 }

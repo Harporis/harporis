@@ -54,6 +54,9 @@ func TestValidate_Errors(t *testing.T) {
 		{"zero max file", func(c *Config) { c.Chunking.MaxFileSizeMB = 0 }, "chunking.max_file_size_mb"},
 		{"empty NATS URL", func(c *Config) { c.NATS.URL = "" }, "nats.url"},
 		{"empty queue group", func(c *Config) { c.NATS.Consumer.QueueGroup = "" }, "queue_group"},
+		{"low ack wait", func(c *Config) { c.NATS.Consumer.RequestAckWaitSeconds = 0 }, "request_ack_wait_seconds"},
+		{"low publish ack wait", func(c *Config) { c.NATS.JetStream.PublishAckWaitSeconds = 0 }, "publish_ack_wait_seconds"},
+		{"low max in flight", func(c *Config) { c.NATS.Consumer.MaxInFlightScans = 0 }, "max_in_flight_scans"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
