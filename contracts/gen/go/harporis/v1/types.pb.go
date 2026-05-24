@@ -143,10 +143,10 @@ type GitRowChunk struct {
 	IsLastInScan   bool                   `protobuf:"varint,4,opt,name=is_last_in_scan,json=isLastInScan,proto3" json:"is_last_in_scan,omitempty"`
 	Kind           ChunkKind              `protobuf:"varint,5,opt,name=kind,proto3,enum=harporis.v1.ChunkKind" json:"kind,omitempty"`
 	// BLOB-kind only
-	BlobSha string           `protobuf:"bytes,10,opt,name=blob_sha,json=blobSha,proto3" json:"blob_sha,omitempty"`
+	BlobSha []byte           `protobuf:"bytes,10,opt,name=blob_sha,json=blobSha,proto3" json:"blob_sha,omitempty"` // raw 20-byte SHA-1 (or 32-byte SHA-256)
 	Refs    []*CommitFileRef `protobuf:"bytes,11,rep,name=refs,proto3" json:"refs,omitempty"`
 	// DIFF_WINDOW-kind only
-	CommitSha         string `protobuf:"bytes,20,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"`
+	CommitSha         []byte `protobuf:"bytes,20,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"` // raw SHA
 	FilePath          string `protobuf:"bytes,21,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
 	ContextLinesAbove int32  `protobuf:"varint,22,opt,name=context_lines_above,json=contextLinesAbove,proto3" json:"context_lines_above,omitempty"`
 	ContextLinesBelow int32  `protobuf:"varint,23,opt,name=context_lines_below,json=contextLinesBelow,proto3" json:"context_lines_below,omitempty"`
@@ -226,11 +226,11 @@ func (x *GitRowChunk) GetKind() ChunkKind {
 	return ChunkKind_CHUNK_KIND_UNSPECIFIED
 }
 
-func (x *GitRowChunk) GetBlobSha() string {
+func (x *GitRowChunk) GetBlobSha() []byte {
 	if x != nil {
 		return x.BlobSha
 	}
-	return ""
+	return nil
 }
 
 func (x *GitRowChunk) GetRefs() []*CommitFileRef {
@@ -240,11 +240,11 @@ func (x *GitRowChunk) GetRefs() []*CommitFileRef {
 	return nil
 }
 
-func (x *GitRowChunk) GetCommitSha() string {
+func (x *GitRowChunk) GetCommitSha() []byte {
 	if x != nil {
 		return x.CommitSha
 	}
-	return ""
+	return nil
 }
 
 func (x *GitRowChunk) GetFilePath() string {
@@ -312,7 +312,7 @@ func (x *GitRowChunk) GetRows() []*GitRow {
 
 type CommitFileRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	CommitSha     string                 `protobuf:"bytes,1,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"`
+	CommitSha     []byte                 `protobuf:"bytes,1,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"` // raw SHA
 	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	Timestamp     int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // unix seconds
 	unknownFields protoimpl.UnknownFields
@@ -349,11 +349,11 @@ func (*CommitFileRef) Descriptor() ([]byte, []int) {
 	return file_harporis_v1_types_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *CommitFileRef) GetCommitSha() string {
+func (x *CommitFileRef) GetCommitSha() []byte {
 	if x != nil {
 		return x.CommitSha
 	}
-	return ""
+	return nil
 }
 
 func (x *CommitFileRef) GetPath() string {
@@ -388,10 +388,10 @@ const file_harporis_v1_types_proto_rawDesc = "" +
 	"\x0fis_last_in_scan\x18\x04 \x01(\bR\fisLastInScan\x12*\n" +
 	"\x04kind\x18\x05 \x01(\x0e2\x16.harporis.v1.ChunkKindR\x04kind\x12\x19\n" +
 	"\bblob_sha\x18\n" +
-	" \x01(\tR\ablobSha\x12.\n" +
+	" \x01(\fR\ablobSha\x12.\n" +
 	"\x04refs\x18\v \x03(\v2\x1a.harporis.v1.CommitFileRefR\x04refs\x12\x1d\n" +
 	"\n" +
-	"commit_sha\x18\x14 \x01(\tR\tcommitSha\x12\x1b\n" +
+	"commit_sha\x18\x14 \x01(\fR\tcommitSha\x12\x1b\n" +
 	"\tfile_path\x18\x15 \x01(\tR\bfilePath\x12.\n" +
 	"\x13context_lines_above\x18\x16 \x01(\x05R\x11contextLinesAbove\x12.\n" +
 	"\x13context_lines_below\x18\x17 \x01(\x05R\x11contextLinesBelow\x12\x1d\n" +
@@ -407,7 +407,7 @@ const file_harporis_v1_types_proto_rawDesc = "" +
 	"\x04rows\x18( \x03(\v2\x13.harporis.v1.GitRowR\x04rows\"`\n" +
 	"\rCommitFileRef\x12\x1d\n" +
 	"\n" +
-	"commit_sha\x18\x01 \x01(\tR\tcommitSha\x12\x12\n" +
+	"commit_sha\x18\x01 \x01(\fR\tcommitSha\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1c\n" +
 	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp*B\n" +
 	"\tChunkKind\x12\x1a\n" +

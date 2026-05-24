@@ -29,11 +29,11 @@ message GitRowChunk {
   ChunkKind kind            = 5;
 
   // BLOB-kind only
-  string                 blob_sha = 10;
+  bytes                  blob_sha = 10;  // raw 20-byte SHA-1 (or 32-byte SHA-256)
   repeated CommitFileRef refs     = 11;
 
   // DIFF_WINDOW-kind only
-  string commit_sha          = 20;
+  bytes  commit_sha          = 20;  // raw SHA
   string file_path           = 21;
   int32  context_lines_above = 22;
   int32  context_lines_below = 23;
@@ -49,7 +49,7 @@ message GitRowChunk {
 }
 
 message CommitFileRef {
-  string commit_sha = 1;
+  bytes  commit_sha = 1;  // raw SHA
   string path       = 2;
   int64  timestamp  = 3;  // unix seconds
 }
