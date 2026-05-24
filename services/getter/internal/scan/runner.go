@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
@@ -97,17 +98,22 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 	if workers <= 0 {
 		workers = 1
 	}
+	walkCtx, walkCancel := context.WithCancel(ctx)
+	defer walkCancel()
+
 	jobs := make(chan git.BlobJob, 2*workers)
 
 	walkErr := make(chan error, 1)
 	go func() {
-		walkErr <- git.WalkBlobs(ctx, r.cfg.RepoDir, args, jobs)
+		walkErr <- git.WalkBlobs(walkCtx, r.cfg.RepoDir, args, jobs)
 		close(jobs)
 	}()
 
 	// Worker pool: each owns its own cat-file subprocess.
 	var wg sync.WaitGroup
 	workerErrs := make(chan error, workers)
+	var spawnedOK atomic.Int32
+
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -117,6 +123,7 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 				workerErrs <- fmt.Errorf("worker: spawn cat-file: %w", err)
 				return
 			}
+			spawnedOK.Add(1)
 			defer batch.Close()
 			for job := range jobs {
 				ok, _ := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
@@ -132,6 +139,16 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 			}
 		}()
 	}
+
+	// Watchdog: if no workers ever succeeded in spawning, cancel the walker so
+	// it doesn't block forever sending into a channel with no consumer.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if spawnedOK.Load() == 0 {
+			walkCancel()
+		}
+	}()
+
 	wg.Wait()
 	close(workerErrs)
 
