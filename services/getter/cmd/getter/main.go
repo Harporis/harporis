@@ -110,7 +110,7 @@ func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Regis
 			metrics.ActiveScans.Dec()
 		}()
 
-		repoDir, cleanup, err := git.PrepareRepo(runCtx, sourceFromProto(req.Source), cfg.Workspace.WorkDir)
+		repoDir, cleanup, err := git.PrepareRepo(runCtx, sourceFromProto(req.Source), cfg.Workspace.WorkDir, cfg.Git.CloneTimeout)
 		if err != nil {
 			return err
 		}

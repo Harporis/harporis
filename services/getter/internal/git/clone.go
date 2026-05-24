@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -30,8 +31,9 @@ func (RemoteSource) isSource() {}
 // PrepareRepo returns the working directory for a scan plus a cleanup func.
 // For LocalSource, the original path is returned and cleanup is a no-op.
 // For RemoteSource, the repo is cloned under workspaceRoot/<uuid>/ and
-// cleanup removes the clone.
-func PrepareRepo(ctx context.Context, src Source, workspaceRoot string) (string, func(), error) {
+// cleanup removes the clone. cloneTimeout caps the duration of a remote clone
+// (no effect for local sources). Pass 0 to disable the timeout.
+func PrepareRepo(ctx context.Context, src Source, workspaceRoot string, cloneTimeout time.Duration) (string, func(), error) {
 	switch s := src.(type) {
 	case LocalSource:
 		if err := verifyGitRepo(s.Path); err != nil {
@@ -50,7 +52,13 @@ func PrepareRepo(ctx context.Context, src Source, workspaceRoot string) (string,
 		if s.Token != "" {
 			url = injectToken(s.URL, s.Token)
 		}
-		cmd := exec.CommandContext(ctx, "git", "clone", "--quiet", url, dest)
+		cloneCtx := ctx
+		if cloneTimeout > 0 {
+			var cancel context.CancelFunc
+			cloneCtx, cancel = context.WithTimeout(ctx, cloneTimeout)
+			defer cancel()
+		}
+		cmd := exec.CommandContext(cloneCtx, "git", "clone", "--quiet", url, dest)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			os.RemoveAll(dest)
 			return "", func() {}, fmt.Errorf("git clone: %w: %s", err, string(out))

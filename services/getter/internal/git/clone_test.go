@@ -17,7 +17,7 @@ func TestPrepareRepo_LocalPath(t *testing.T) {
 	r.Commit("add hello")
 
 	ctx := context.Background()
-	work, cleanup, err := PrepareRepo(ctx, LocalSource{Path: r.Dir}, "")
+	work, cleanup, err := PrepareRepo(ctx, LocalSource{Path: r.Dir}, "", 0)
 	require.NoError(t, err)
 	defer cleanup()
 
@@ -28,7 +28,7 @@ func TestPrepareRepo_LocalPath(t *testing.T) {
 func TestPrepareRepo_LocalPath_NotARepo(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	_, _, err := PrepareRepo(ctx, LocalSource{Path: dir}, "")
+	_, _, err := PrepareRepo(ctx, LocalSource{Path: dir}, "", 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not a git repository")
 }
@@ -42,7 +42,7 @@ func TestPrepareRepo_RemoteFileURL(t *testing.T) {
 	workspace := t.TempDir()
 	ctx := context.Background()
 	url := "file://" + upstream.Dir
-	work, cleanup, err := PrepareRepo(ctx, RemoteSource{URL: url}, workspace)
+	work, cleanup, err := PrepareRepo(ctx, RemoteSource{URL: url}, workspace, 0)
 	require.NoError(t, err)
 	defer cleanup()
 
