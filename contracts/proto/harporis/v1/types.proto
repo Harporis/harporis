@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package harporis.v1;
+
+option go_package = "github.com/Harporis/harporis/contracts/gen/go/harporis/v1;harporisv1";
+
+// GitRow is one line of a file (or reconstructed-file for DIFF_WINDOW),
+// carrying line-level metadata. Always part of a GitRowChunk.
+message GitRow {
+  int32 line_number = 1;   // 1-based, as in an editor
+  int64 byte_offset = 2;   // start offset of the line in the source blob/file
+  bytes content     = 3;   // raw bytes of the line WITHOUT trailing \n
+}
+
+enum ChunkKind {
+  CHUNK_KIND_UNSPECIFIED = 0;
+  BLOB        = 1;  // a slice of a blob at one or more (commit, path) refs
+  DIFF_WINDOW = 2;  // hunk + N context lines around it
+}
+
+// GitRowChunk is a contiguous range of lines from a single source
+// (blob or diff hunk) plus correlation metadata. The validator
+// reconstructs text by joining rows[].content with '\n'.
+message GitRowChunk {
+  string    scan_id         = 1;
+  string    chunk_id        = 2;  // UUIDv4
+  int64     sequence_number = 3;  // monotonic per-worker
+  bool      is_last_in_scan = 4;
+  ChunkKind kind            = 5;
+
+  // BLOB-kind only
+  string                 blob_sha = 10;
+  repeated CommitFileRef refs     = 11;
+
+  // DIFF_WINDOW-kind only
+  string commit_sha          = 20;
+  string file_path           = 21;
+  int32  context_lines_above = 22;
+  int32  context_lines_below = 23;
+
+  // Slice info (both kinds)
+  int32 start_line  = 30;
+  int32 end_line    = 31;
+  int32 total_lines = 32;
+  int32 chunk_index = 33;
+  int32 chunk_count = 34;
+
+  repeated GitRow rows = 40;
+}
+
+message CommitFileRef {
+  string commit_sha = 1;
+  string path       = 2;
+  int64  timestamp  = 3;  // unix seconds
+}
