@@ -143,5 +143,11 @@ func RunDiff(ctx context.Context, repoDir string, contextLines int, extraArgs ..
 	cliArgs := []string{"-C", repoDir, "diff", fmt.Sprintf("-U%d", contextLines)}
 	cliArgs = append(cliArgs, extraArgs...)
 	cmd := exec.CommandContext(ctx, "git", cliArgs...)
-	return cmd.Output()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff %v: %w: %s", cliArgs, err, stderr.String())
+	}
+	return out, nil
 }
