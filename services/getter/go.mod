@@ -25,3 +25,8 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+require github.com/Harporis/harporis/contracts v0.0.0
+
+replace github.com/Harporis/harporis/contracts => ../../contracts
+
