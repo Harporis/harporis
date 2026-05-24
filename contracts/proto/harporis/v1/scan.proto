@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package harporis.v1;
+
+option go_package = "github.com/Harporis/harporis/contracts/gen/go/harporis/v1;harporisv1";
+
+enum ScanType {
+  SCAN_TYPE_UNSPECIFIED = 0;
+  FULL_HISTORY  = 1;
+  BRANCH_FULL   = 2;
+  COMMIT_RANGE  = 3;
+  CURRENT_STATE = 4;
+  BRANCH_DIFF   = 5;
+  HEAD_DIFF     = 6;
+  STAGED        = 7;
+}
+
+message ScanRange {
+  string branch      = 1;
+  string base_branch = 2;
+  string commit_from = 3;
+  string commit_to   = 4;
+}
+
+message SshAuth {
+  string private_key_pem = 1;
+  string known_hosts     = 2;
+}
+
+message RemoteRepo {
+  string url = 1;
+  oneof auth {
+    string  token = 2;
+    SshAuth ssh   = 3;
+  }
+}
+
+message Source {
+  oneof src {
+    string     local_path = 1;
+    RemoteRepo remote     = 2;
+  }
+}
+
+message OutputConfig {
+  string              kind   = 1;
+  map<string, string> params = 2;
+}
+
+message ConfigOverride {
+  int32 max_file_size_mb     = 1;
+  int32 row_size_target_kb   = 2;
+  int32 max_ram_mb           = 3;
+}
+
+message ScanRequest {
+  string         scan_id   = 1;
+  Source         source    = 2;
+  ScanType       type      = 3;
+  ScanRange      range     = 4;
+  ConfigOverride overrides = 5;
+  OutputConfig   output    = 6;
+}

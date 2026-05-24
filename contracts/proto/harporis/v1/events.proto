@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package harporis.v1;
+
+import "harporis/v1/scan.proto";
+
+option go_package = "github.com/Harporis/harporis/contracts/gen/go/harporis/v1;harporisv1";
+
+enum ScanState {
+  SCAN_STATE_UNSPECIFIED = 0;
+  PENDING   = 1;
+  RUNNING   = 2;
+  COMPLETED = 3;
+  PARTIAL   = 4;
+  FAILED    = 5;
+  CANCELLED = 6;
+}
+
+message ScanMetrics {
+  int64 blobs_scanned      = 1;
+  int64 blobs_skipped      = 2;
+  int64 chunks_published   = 3;
+  int64 bytes_published    = 4;
+  int64 errors_total       = 5;
+  int64 duration_ms        = 6;
+}
+
+message StatusEvent {
+  string       scan_id       = 1;
+  ScanState    state         = 2;
+  int64        timestamp     = 3;
+  string       message       = 4;
+  ScanMetrics  metrics       = 5;
+  OutputConfig output_config = 6;
+}
+
+message CancelScanRequest {
+  string scan_id = 1;
+  string reason  = 2;
+}

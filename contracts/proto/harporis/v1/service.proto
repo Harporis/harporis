@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package harporis.v1;
+
+import "harporis/v1/scan.proto";
+import "harporis/v1/events.proto";
+
+option go_package = "github.com/Harporis/harporis/contracts/gen/go/harporis/v1;harporisv1";
+
+message HealthRequest {}
+message HealthResponse {
+  string status = 1;
+}
+
+message StartScanLocalResponse {
+  string    scan_id        = 1;
+  ScanState initial_state  = 2;
+  string    chunks_subject = 3;
+  string    status_subject = 4;
+}
+
+service GetterService {
+  rpc Health         (HealthRequest) returns (HealthResponse);
+  rpc StartScanLocal (ScanRequest)   returns (StartScanLocalResponse);
+}
