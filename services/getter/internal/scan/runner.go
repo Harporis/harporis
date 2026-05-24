@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/Harporis/harporis/services/getter/internal/chunk"
 	"github.com/Harporis/harporis/services/getter/internal/filter"
 	"github.com/Harporis/harporis/services/getter/internal/git"
+	"github.com/Harporis/harporis/services/getter/internal/metrics"
 )
 
 // Publisher is implemented by the NATS publisher (and by test fakes).
@@ -46,6 +48,9 @@ func NewRunner(cfg RunnerConfig) *Runner {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 1
 	}
+	// Idempotent: ensures metric counters are registered even when the runner
+	// is exercised outside of main (e.g. in tests).
+	metrics.Init()
 	return &Runner{cfg: cfg, scanCtx: NewContext(cfg.ScanID)}
 }
 
@@ -288,7 +293,10 @@ func (r *Runner) emitStatus(ctx context.Context, state v1.ScanState, msg string)
 		Metrics:      r.scanCtx.Snapshot(),
 		OutputConfig: r.cfg.Output,
 	}
-	_ = r.cfg.Publisher.PublishStatus(ctx, ev)
+	if err := r.cfg.Publisher.PublishStatus(ctx, ev); err != nil {
+		slog.Warn("status publish failed", "scan_id", r.cfg.ScanID, "state", state.String(), "err", err)
+		metrics.StatusPublishErrors.WithLabelValues(r.cfg.ScanID).Inc()
+	}
 }
 
 // bytesReader is io.Reader over a []byte without depending on bytes.NewReader's

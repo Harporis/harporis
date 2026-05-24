@@ -112,6 +112,43 @@ func TestRunner_MultiWorker(t *testing.T) {
 	require.GreaterOrEqual(t, len(seenBlobs), 20)
 }
 
+type errStatusPublisher struct {
+	fakePublisher
+	failStatus bool
+}
+
+func (p *errStatusPublisher) PublishStatus(ctx context.Context, ev *v1.StatusEvent) error {
+	if p.failStatus {
+		return fmt.Errorf("simulated status publish failure")
+	}
+	return p.fakePublisher.PublishStatus(ctx, ev)
+}
+
+func TestRunner_StatusPublishFailureDoesNotKillScan(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a.go", "package main\n")
+	r.Commit("c1")
+
+	pub := &errStatusPublisher{failStatus: true}
+	flt := &filter.Filter{
+		PathExclusions:   []string{".git/"},
+		BinaryExtensions: map[string]struct{}{},
+		MaxFileSize:      int64(10 * 1024 * 1024),
+	}
+	runner := NewRunner(RunnerConfig{
+		ScanID:             "scan-statuserr",
+		RepoDir:            r.Dir,
+		WalkMode:           "current_state",
+		Filter:             flt,
+		Publisher:          pub,
+		RowSizeTargetBytes: 1024,
+		Workers:            1,
+	})
+	// Scan must complete (publishing status fails but doesn't propagate).
+	require.NoError(t, runner.Run(context.Background()))
+	require.GreaterOrEqual(t, len(pub.chunks), 1)
+}
+
 func TestRunner_StagedDiff(t *testing.T) {
 	r := testutil.NewGitRepo(t)
 	r.Write("a.go", "package main\n")

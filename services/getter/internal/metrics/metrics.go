@@ -11,13 +11,14 @@ import (
 var (
 	once sync.Once
 
-	BlobsScanned    *prometheus.CounterVec
-	BlobsSkipped    *prometheus.CounterVec
-	ChunksPublished *prometheus.CounterVec
-	BytesPublished  *prometheus.CounterVec
-	ErrorsTotal     *prometheus.CounterVec
-	ScanDuration    *prometheus.HistogramVec
-	ActiveScans     prometheus.Gauge
+	BlobsScanned        *prometheus.CounterVec
+	BlobsSkipped        *prometheus.CounterVec
+	ChunksPublished     *prometheus.CounterVec
+	BytesPublished      *prometheus.CounterVec
+	ErrorsTotal         *prometheus.CounterVec
+	StatusPublishErrors *prometheus.CounterVec
+	ScanDuration        *prometheus.HistogramVec
+	ActiveScans         prometheus.Gauge
 
 	registry *prometheus.Registry
 )
@@ -36,6 +37,8 @@ func Init() {
 			Name: "harporis_getter_bytes_published_total"}, []string{"scan_id"})
 		ErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "harporis_getter_errors_total"}, []string{"scan_id", "type"})
+		StatusPublishErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "harporis_getter_status_publish_errors_total"}, []string{"scan_id"})
 		ScanDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "harporis_getter_scan_duration_seconds", Buckets: prometheus.DefBuckets,
 		}, []string{"scan_id", "status"})
@@ -43,7 +46,7 @@ func Init() {
 			Name: "harporis_getter_active_scans"})
 		for _, c := range []prometheus.Collector{
 			BlobsScanned, BlobsSkipped, ChunksPublished, BytesPublished,
-			ErrorsTotal, ScanDuration, ActiveScans,
+			ErrorsTotal, StatusPublishErrors, ScanDuration, ActiveScans,
 		} {
 			registry.MustRegister(c)
 		}
