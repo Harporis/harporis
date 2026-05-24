@@ -2,12 +2,24 @@ package git
 
 import (
 	"context"
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/Harporis/harporis/services/getter/internal/testutil"
 )
+
+func TestResolveHead(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a.txt", "hi")
+	want := r.Commit("c1")
+
+	sha, err := ResolveHead(context.Background(), r.Dir)
+	require.NoError(t, err)
+	require.Len(t, sha, 20, "SHA-1 is 20 bytes")
+	require.Equal(t, want, hex.EncodeToString(sha))
+}
 
 func TestWalkBlobs_CurrentState_DedupsAndEmitsAll(t *testing.T) {
 	r := testutil.NewGitRepo(t)

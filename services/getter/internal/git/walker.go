@@ -45,6 +45,17 @@ func resolveHead(ctx context.Context, repoDir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// ResolveHead returns the raw 20-byte commit SHA that HEAD currently points to.
+// Wire consumers expect raw bytes (proto CommitFileRef.commit_sha is bytes),
+// not the hex form.
+func ResolveHead(ctx context.Context, repoDir string) ([]byte, error) {
+	hexSHA, err := resolveHead(ctx, repoDir)
+	if err != nil {
+		return nil, err
+	}
+	return decodeCommitSHA(hexSHA)
+}
+
 // decodeCommitSHA converts a hex commit SHA into its raw byte representation
 // for the proto CommitFileRef.commit_sha field (which is bytes).
 func decodeCommitSHA(hexSHA string) ([]byte, error) {

@@ -192,6 +192,10 @@ func (r *Runner) runDiff(ctx context.Context) error {
 	default:
 		return fmt.Errorf("unknown diff mode %q", r.cfg.WalkMode)
 	}
+	commitSHA, err := git.ResolveHead(ctx, r.cfg.RepoDir)
+	if err != nil {
+		return fmt.Errorf("resolve HEAD for diff scan: %w", err)
+	}
 	raw, err := git.RunDiff(ctx, r.cfg.RepoDir, r.cfg.DiffContextLines, extra...)
 	if err != nil {
 		return fmt.Errorf("git diff: %w", err)
@@ -209,7 +213,7 @@ func (r *Runner) runDiff(ctx context.Context) error {
 			r.scanCtx.BlobsSkipped.Add(1)
 			continue
 		}
-		if err := r.publishDiffPatch(ctx, p); err != nil {
+		if err := r.publishDiffPatch(ctx, commitSHA, p); err != nil {
 			r.scanCtx.Errors.Add(1)
 		} else {
 			r.scanCtx.BlobsScanned.Add(1)
@@ -218,10 +222,7 @@ func (r *Runner) runDiff(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) publishDiffPatch(ctx context.Context, p git.Patch) error {
-	// MVP: use a placeholder "HEAD" sentinel as the commit SHA bytes.
-	// Real HEAD resolution (git rev-parse HEAD) is deferred — see concerns.
-	commitSHA := []byte("HEAD")
+func (r *Runner) publishDiffPatch(ctx context.Context, commitSHA []byte, p git.Patch) error {
 	for _, h := range p.Hunks {
 		builder := chunk.NewBuilder(chunk.BuilderConfig{
 			ScanID:             r.cfg.ScanID,
