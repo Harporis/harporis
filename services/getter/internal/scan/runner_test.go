@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestRunner_CurrentState_EndToEnd(t *testing.T) {
 		Publisher:          pub,
 		RowSizeTargetBytes: 1024,
 		OverlapLines:       0,
-		Workers:            1,
+		Workers:            4,
 	})
 
 	ctx := context.Background()
@@ -76,6 +77,39 @@ func TestRunner_CurrentState_EndToEnd(t *testing.T) {
 	require.GreaterOrEqual(t, len(pub.statuses), 2)
 	require.Equal(t, v1.ScanState_RUNNING, pub.statuses[0].State)
 	require.Equal(t, v1.ScanState_COMPLETED, pub.statuses[len(pub.statuses)-1].State)
+}
+
+func TestRunner_MultiWorker(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	for i := 0; i < 20; i++ {
+		r.Write(fmt.Sprintf("file-%02d.go", i), fmt.Sprintf("package p\nconst X%d = %q\n", i, fmt.Sprintf("v%d", i)))
+	}
+	r.Commit("seed")
+
+	pub := &fakePublisher{}
+	flt := &filter.Filter{
+		PathExclusions:   []string{".git/"},
+		BinaryExtensions: map[string]struct{}{},
+		MaxFileSize:      int64(10 * 1024 * 1024),
+	}
+	runner := NewRunner(RunnerConfig{
+		ScanID:             "scan-mw",
+		RepoDir:            r.Dir,
+		WalkMode:           "current_state",
+		Filter:             flt,
+		Publisher:          pub,
+		RowSizeTargetBytes: 1024,
+		OverlapLines:       0,
+		Workers:            8,
+	})
+	require.NoError(t, runner.Run(context.Background()))
+
+	// Each file → at least 1 chunk; with 20 distinct contents, expect ≥ 20 unique blob_shas.
+	seenBlobs := map[string]bool{}
+	for _, c := range pub.chunks {
+		seenBlobs[string(c.BlobSha)] = true
+	}
+	require.GreaterOrEqual(t, len(seenBlobs), 20)
 }
 
 func TestRunner_StagedDiff(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
@@ -87,31 +88,51 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
-	jobs := make(chan git.BlobJob, 2*r.cfg.Workers)
+	workers := r.cfg.Workers
+	if workers <= 0 {
+		workers = 1
+	}
+	jobs := make(chan git.BlobJob, 2*workers)
+
 	walkErr := make(chan error, 1)
 	go func() {
 		walkErr <- git.WalkBlobs(ctx, r.cfg.RepoDir, args, jobs)
 		close(jobs)
 	}()
 
-	// MVP single-worker loop; multi-worker comes after NATS wiring.
-	batch, err := git.NewBatch(ctx, r.cfg.RepoDir)
-	if err != nil {
-		return err
+	// Worker pool: each owns its own cat-file subprocess.
+	var wg sync.WaitGroup
+	workerErrs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			batch, err := git.NewBatch(ctx, r.cfg.RepoDir)
+			if err != nil {
+				workerErrs <- fmt.Errorf("worker: spawn cat-file: %w", err)
+				return
+			}
+			defer batch.Close()
+			for job := range jobs {
+				ok, _ := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
+				if !ok {
+					r.scanCtx.BlobsSkipped.Add(1)
+					continue
+				}
+				if err := r.processBlob(ctx, batch, job); err != nil {
+					r.scanCtx.Errors.Add(1)
+				} else {
+					r.scanCtx.BlobsScanned.Add(1)
+				}
+			}
+		}()
 	}
-	defer batch.Close()
+	wg.Wait()
+	close(workerErrs)
 
-	for job := range jobs {
-		ok, reason := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
-		if !ok {
-			r.scanCtx.BlobsSkipped.Add(1)
-			_ = reason // metrics layer wires this up in Task 40
-			continue
-		}
-		if err := r.processBlob(ctx, batch, job); err != nil {
-			r.scanCtx.Errors.Add(1)
-		} else {
-			r.scanCtx.BlobsScanned.Add(1)
+	for werr := range workerErrs {
+		if werr != nil {
+			return werr
 		}
 	}
 	return <-walkErr
