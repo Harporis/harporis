@@ -11,7 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
-	"github.com/Harporis/harporis/contracts/wire"
+	"github.com/Harporis/harporis/kit/nats/wire"
 
 	"github.com/Harporis/harporis/services/getter/internal/filter"
 	getnats "github.com/Harporis/harporis/services/getter/internal/nats"
