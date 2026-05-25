@@ -153,10 +153,10 @@ func cmdCancel(args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
 	natsURL := fs.String("nats", defaultNATSURL(), "NATS URL")
 	reason := fs.String("reason", "operator cancelled", "free-form cancellation reason")
-	_ = fs.Parse(args)
+	_ = fs.Parse(shuffleFlagsFirst(args))
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fatal("usage: getter-cli cancel <scan-id>")
+		fatal("usage: getter-cli cancel <scan-id> [--reason \"...\"]")
 	}
 	scanID := rest[0]
 
@@ -181,10 +181,10 @@ func cmdWatch(args []string) {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	natsURL := fs.String("nats", defaultNATSURL(), "NATS URL")
 	timeout := fs.Duration("timeout", 30*time.Minute, "stop watching after this much idle time")
-	_ = fs.Parse(args)
+	_ = fs.Parse(shuffleFlagsFirst(args))
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fatal("usage: getter-cli watch <scan-id>")
+		fatal("usage: getter-cli watch <scan-id> [--timeout <dur>]")
 	}
 	scanID := rest[0]
 
@@ -342,6 +342,31 @@ func sanitizeID(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// shuffleFlagsFirst moves all flag-like tokens to the front, leaving
+// positionals at the end. The stdlib `flag` package stops at the first
+// non-flag, which makes "cancel scan-id --reason x" fail unless flags
+// come first. Used only for subcommands that take a single positional
+// and have no bool flags.
+func shuffleFlagsFirst(args []string) []string {
+	var flags []string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+			// --key=value (and -k=v) are self-contained; --key value needs
+			// the next token. Only consume the next if it's not flag-like.
+			if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flags = append(flags, args[i+1])
+				i++
+			}
+			continue
+		}
+		positional = append(positional, a)
+	}
+	return append(flags, positional...)
 }
 
 func fatal(format string, args ...any) {

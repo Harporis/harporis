@@ -1,13 +1,13 @@
 service:
   name: getter
-  log_level: info
+  log_level: ${LOG_LEVEL:-info}
 
 grpc:
   port: 50051
   allow_local_start: false
 
 workspace:
-  work_dir: /var/lib/harporis/scans
+  work_dir: ${WORK_DIR:-/var/lib/harporis/scans}
   cleanup_on_complete: true
 
 resources:
@@ -86,7 +86,7 @@ filters:
     - ".dmg"
 
 nats:
-  url: nats://localhost:4222
+  url: ${NATS_URL:-nats://localhost:4222}
   jetstream:
     requests_stream: HARPORIS_REQUESTS
     chunks_stream:   HARPORIS_CHUNKS

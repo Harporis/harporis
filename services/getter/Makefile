@@ -1,14 +1,12 @@
-.PHONY: build build-cli test lint run
+.PHONY: build build-getter build-cli test lint run clean
 
-build: bin/getter bin/getter-cli
+build: build-getter build-cli
 
-bin/getter:
+build-getter:
 	go build -o bin/getter ./cmd/getter
 
-bin/getter-cli:
+build-cli:
 	go build -o bin/getter-cli ./cmd/getter-cli
-
-build-cli: bin/getter-cli
 
 test:
 	go test ./... -race -timeout 90s
@@ -16,7 +14,7 @@ test:
 lint:
 	go vet ./...
 
-run: bin/getter
+run: build-getter
 	./bin/getter --config config/getter.yaml
 
 clean:
