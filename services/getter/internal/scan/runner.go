@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -190,7 +191,7 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 	}
 
 	// Build a multi-reader: prefix + remaining stream.
-	combined := io.MultiReader(bytesReader(prefix), rc)
+	combined := io.MultiReader(bytes.NewReader(prefix), rc)
 	scanner := chunk.NewLineScanner(combined, 1<<24)
 	builder := chunk.NewBuilder(chunk.BuilderConfig{
 		ScanID:             r.cfg.ScanID,
@@ -345,20 +346,3 @@ func (r *Runner) emitStatus(ctx context.Context, state v1.ScanState, msg string)
 	}
 }
 
-// bytesReader is io.Reader over a []byte without depending on bytes.NewReader's
-// extra surface (kept inline to make the code self-contained).
-func bytesReader(b []byte) io.Reader { return &byteSliceReader{b: b} }
-
-type byteSliceReader struct {
-	b   []byte
-	off int
-}
-
-func (r *byteSliceReader) Read(p []byte) (int, error) {
-	if r.off >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.off:])
-	r.off += n
-	return n, nil
-}
