@@ -69,7 +69,11 @@ func (c *Client) Close() {
 // "name already in use" errors.
 func EnsureStreams(js nats.JetStreamContext) error {
 	configs := []*nats.StreamConfig{
-		{Name: RequestsStream, Subjects: []string{"harporis.scans.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
+		// RequestsStream captures ONLY the requests subject. CancelSubject is
+		// intentionally not in the filter: cancel is a fire-and-forget broadcast
+		// over core NATS, and a WorkQueuePolicy stream with no matching
+		// subscriber would let cancels accumulate without bound.
+		{Name: RequestsStream, Subjects: []string{ScansRequestsSubject}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
 		{Name: ChunksStream, Subjects: []string{"harporis.chunks.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
 		{Name: StatusStream, Subjects: []string{"harporis.status.>"}, Storage: nats.FileStorage, Retention: nats.LimitsPolicy},
 		{Name: FindingsStream, Subjects: []string{"harporis.findings.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},

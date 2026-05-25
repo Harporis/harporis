@@ -21,8 +21,10 @@ func TestRegistry_RegisterUnregister(t *testing.T) {
 	require.True(t, ok)
 	require.Same(t, sc, got)
 
-	require.True(t, reg.Cancel("a"))
+	require.True(t, reg.Cancel("a", "user changed mind"))
 	<-ctx.Done() // cancel func invoked
+	require.Equal(t, "user changed mind", sc.CancelReason(),
+		"reason from CancelScanRequest must reach the scan context")
 
 	reg.Unregister("a")
 	_, ok = reg.Get("a")
@@ -30,5 +32,5 @@ func TestRegistry_RegisterUnregister(t *testing.T) {
 }
 
 func TestRegistry_CancelMissing(t *testing.T) {
-	require.False(t, NewRegistry().Cancel("missing"))
+	require.False(t, NewRegistry().Cancel("missing", "anything"))
 }

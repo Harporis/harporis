@@ -38,6 +38,9 @@ func Validate(c *Config) error {
 	if c.Chunking.MaxFileSizeMB <= 0 {
 		errs = append(errs, errors.New("chunking.max_file_size_mb: must be > 0"))
 	}
+	if c.Chunking.DiffContextLines < 0 {
+		errs = append(errs, fmt.Errorf("chunking.diff_context_lines: must be >= 0 (got %d)", c.Chunking.DiffContextLines))
+	}
 	if c.NATS.URL == "" {
 		errs = append(errs, errors.New("nats.url: must not be empty"))
 	}

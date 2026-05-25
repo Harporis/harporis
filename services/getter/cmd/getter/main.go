@@ -71,21 +71,18 @@ func main() {
 	if err != nil {
 		fatal("subscribe requests: %v", err)
 	}
-	defer requestsSub.Unsubscribe()
 
 	cancelSub, err := getnats.SubscribeCancel(rootCtx, cl.NC,
 		func(_ context.Context, req *v1.CancelScanRequest) {
-			registry.Cancel(req.ScanId)
+			registry.Cancel(req.ScanId, req.Reason)
 		})
 	if err != nil {
 		fatal("subscribe cancel: %v", err)
 	}
-	defer cancelSub.Unsubscribe()
 
 	metricsSrv := metrics.ServeAsync(rootCtx, *metricsPort)
 
 	grpcSrv, grpcLis := startGRPC(cfg)
-	defer grpcSrv.Stop()
 
 	slog.Info("getter ready",
 		"nats", cfg.NATS.URL, "grpc", grpcLis.Addr().String(), "metrics", *metricsPort)
@@ -94,11 +91,47 @@ func main() {
 	slog.Info("shutdown initiated")
 	shutdownCtx, sc := context.WithTimeout(context.Background(), 30*time.Second)
 	defer sc()
+
+	// Drain subscriptions so in-flight handlers (which may still be running
+	// long scans, kept alive by heartbeats) get a chance to finish before
+	// the connection closes. Drain returns immediately; the connection
+	// stays open until the subscriptions report no more pending msgs.
+	_ = requestsSub.Drain()
+	_ = cancelSub.Drain()
+	if err := cl.NC.Drain(); err != nil {
+		slog.Warn("nats drain failed", "err", err)
+	}
+
+	// gRPC: GracefulStop allows in-flight RPCs to complete (Health is fast,
+	// StartScanLocal is gated off in prod).
+	grpcDone := make(chan struct{})
+	go func() {
+		grpcSrv.GracefulStop()
+		close(grpcDone)
+	}()
+	select {
+	case <-grpcDone:
+	case <-shutdownCtx.Done():
+		grpcSrv.Stop() // hard stop on timeout
+	}
+
 	_ = metricsSrv.Shutdown(shutdownCtx)
+	_ = grpcLis.Close()
 }
 
 func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Registry) func(context.Context, *v1.ScanRequest) error {
 	return func(ctx context.Context, req *v1.ScanRequest) error {
+		if err := scan.ValidateScanID(req.ScanId); err != nil {
+			return fmt.Errorf("reject scan request: %w", err)
+		}
+		walkMode := walkModeFromProto(req.Type)
+		if walkMode == "" {
+			return fmt.Errorf("reject scan request: scan_type unset or unknown (%s)", req.Type.String())
+		}
+		source, err := sourceFromProto(req.Source)
+		if err != nil {
+			return fmt.Errorf("reject scan request: %w", err)
+		}
 		scanID := req.ScanId
 		sc := scan.NewContext(scanID)
 		runCtx, cancel := context.WithCancel(ctx)
@@ -112,7 +145,7 @@ func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Regis
 			metrics.ActiveScans.Dec()
 		}()
 
-		repoDir, cleanup, err := git.PrepareRepo(runCtx, sourceFromProto(req.Source), cfg.Workspace.WorkDir, cfg.Git.CloneTimeout)
+		repoDir, cleanup, err := git.PrepareRepo(runCtx, source, cfg.Workspace.WorkDir, cfg.Git.CloneTimeout)
 		if err != nil {
 			return err
 		}
@@ -125,7 +158,7 @@ func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Regis
 		runner := scan.NewRunner(scan.RunnerConfig{
 			ScanID:             scanID,
 			RepoDir:            repoDir,
-			WalkMode:           walkModeFromProto(req.Type),
+			WalkMode:           walkMode,
 			Branch:             req.Range.GetBranch(),
 			BaseBranch:         req.Range.GetBaseBranch(),
 			Filter:             buildFilter(cfg, repoDir),
@@ -167,17 +200,29 @@ func loadGitAttributes(repoDir string) *filter.GitAttributes {
 	return attrs
 }
 
-func sourceFromProto(s *v1.Source) git.Source {
+// sourceFromProto maps a ScanRequest.Source to the internal git.Source
+// representation. Unset Source is rejected — every scan must declare what
+// it scans; defaulting silently to '.' (process CWD) was a bad surprise.
+func sourceFromProto(s *v1.Source) (git.Source, error) {
 	if s == nil {
-		return git.LocalSource{Path: "."}
+		return nil, fmt.Errorf("Source field is required")
 	}
 	if p := s.GetLocalPath(); p != "" {
-		return git.LocalSource{Path: p}
+		return git.LocalSource{Path: p}, nil
 	}
-	if rem := s.GetRemote(); rem != nil {
-		return git.RemoteSource{URL: rem.Url, Token: rem.GetToken()}
+	rem := s.GetRemote()
+	if rem == nil || rem.Url == "" {
+		return nil, fmt.Errorf("Source.remote.url is required when local_path is empty")
 	}
-	return git.LocalSource{Path: "."}
+	out := git.RemoteSource{URL: rem.Url}
+	if tok := rem.GetToken(); tok != "" {
+		out.Token = tok
+	}
+	if ssh := rem.GetSsh(); ssh != nil {
+		out.SSHPrivateKeyPEM = []byte(ssh.PrivateKeyPem)
+		out.SSHKnownHosts = []byte(ssh.KnownHosts)
+	}
+	return out, nil
 }
 
 func walkModeFromProto(t v1.ScanType) string {

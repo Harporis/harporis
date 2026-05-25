@@ -41,14 +41,19 @@ func (r *Registry) Get(id string) (*Context, bool) {
 	return e.ctx, true
 }
 
-// Cancel invokes the cancel func for the given scan_id, if active.
-// Returns false if no such scan is in the registry.
-func (r *Registry) Cancel(id string) bool {
+// Cancel invokes the cancel func for the given scan_id, if active, and
+// records the supplied reason on the scan context so the runner can
+// surface it in the final status event. Returns false if no such scan
+// is in the registry.
+func (r *Registry) Cancel(id, reason string) bool {
 	r.mu.RLock()
 	e, ok := r.scans[id]
 	r.mu.RUnlock()
 	if !ok {
 		return false
+	}
+	if reason != "" {
+		e.ctx.SetCancelReason(reason)
 	}
 	e.cancel()
 	return true

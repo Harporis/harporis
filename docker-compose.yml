@@ -1,0 +1,61 @@
+# Local dev stack: NATS (JetStream) + Harporis getter, both in containers.
+# The CLI runs on the host and talks to NATS at localhost:4222.
+#
+# Bring up:    docker compose up --build
+# Tear down:   docker compose down -v
+#
+# Scan a host repo with the CLI:
+#   1) mount the repo into the getter container by adding a volume below:
+#        - ./my-repo:/repos/my-repo:ro
+#   2) submit a scan from the host:
+#        ./services/getter/bin/getter-cli scan --local /repos/my-repo --wait
+#      (path is what the getter sees inside the container, NOT the host path).
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: harporis-nats
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring + /healthz
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      # The default nats image is scratch-based (no shell, no wget). The
+      # -alpine variant has wget; the /healthz endpoint is the canonical
+      # JetStream-aware health probe.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz | grep -q '\"status\":\"ok\"'"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  getter:
+    build:
+      context: .
+      dockerfile: services/getter/Dockerfile
+    image: harporis/getter:dev
+    container_name: harporis-getter
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      LOG_LEVEL: info
+      WORK_DIR: /var/lib/harporis/scans
+    ports:
+      - "9100:9100"    # Prometheus /metrics
+      - "50051:50051"  # gRPC Health
+    volumes:
+      - getter-work:/var/lib/harporis/scans
+      # Add host paths here to scan local repositories. The path on the
+      # right side is what the getter sees and what you pass to
+      # `getter-cli scan --local`.
+      - /tmp/demo-repo:/repos/demo:ro
+    restart: unless-stopped
+
+volumes:
+  nats-data:
+  getter-work:

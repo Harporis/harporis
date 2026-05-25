@@ -1,13 +1,14 @@
 package scan
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
@@ -60,32 +61,47 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 	r.emitStatus(ctx, v1.ScanState_RUNNING, "scan started")
+	startedAt := time.Now()
 
 	defer func() {
-		// emit a final status reflecting whatever terminal state we reached
-		r.emitStatus(ctx, r.scanCtx.State(), "scan finished")
+		// Final status must reach downstream even if the scan was killed by
+		// ctx cancellation — use a fresh context so the publish is not
+		// short-circuited by the already-cancelled scan ctx.
+		finalCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		final := r.scanCtx.State()
+		metrics.ScanDuration.WithLabelValues(r.cfg.ScanID, final.String()).Observe(time.Since(startedAt).Seconds())
+		msg := "scan finished"
+		if final == v1.ScanState_CANCELLED {
+			if reason := r.scanCtx.CancelReason(); reason != "" {
+				msg = "scan cancelled: " + reason
+			} else {
+				msg = "scan cancelled"
+			}
+		}
+		r.emitStatus(finalCtx, final, msg)
 	}()
 
 	switch r.cfg.WalkMode {
 	case "current_state":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkCurrentState}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "full_history":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkFullHistory}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "branch_full":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkBranchFull, Branch: r.cfg.Branch}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "commit_range":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkCommitRange, Range: r.cfg.Range}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "branch_diff", "head_diff", "staged":
 		if err := r.runDiff(ctx); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	default:
 		return r.finishWith(v1.ScanState_FAILED, fmt.Errorf("unknown walk mode %q", r.cfg.WalkMode))
@@ -112,7 +128,12 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 	// Worker pool: each owns its own cat-file subprocess.
 	var wg sync.WaitGroup
 	workerErrs := make(chan error, workers)
-	var spawnedOK atomic.Int32
+	// Each worker writes exactly once to spawnSig: true on cat-file spawn
+	// success, false on failure. A coordinator goroutine waits on this and
+	// cancels the walker iff *all* workers fail to spawn — replacing a
+	// previous hard-coded 100ms watchdog that could fire prematurely on
+	// cold-start containers.
+	spawnSig := make(chan bool, workers)
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -120,31 +141,32 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 			defer wg.Done()
 			batch, err := git.NewBatch(ctx, r.cfg.RepoDir)
 			if err != nil {
+				spawnSig <- false
 				workerErrs <- fmt.Errorf("worker: spawn cat-file: %w", err)
 				return
 			}
-			spawnedOK.Add(1)
+			spawnSig <- true
 			defer batch.Close()
 			for job := range jobs {
-				ok, _ := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
+				ok, reason := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
 				if !ok {
 					r.scanCtx.BlobsSkipped.Add(1)
+					metrics.BlobsSkipped.WithLabelValues(r.cfg.ScanID, string(reason)).Inc()
 					continue
 				}
 				if err := r.processBlob(ctx, batch, job); err != nil {
 					r.scanCtx.Errors.Add(1)
+					metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "process_blob").Inc()
 				} else {
 					r.scanCtx.BlobsScanned.Add(1)
+					metrics.BlobsScanned.WithLabelValues(r.cfg.ScanID).Inc()
 				}
 			}
 		}()
 	}
 
-	// Watchdog: if no workers ever succeeded in spawning, cancel the walker so
-	// it doesn't block forever sending into a channel with no consumer.
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		if spawnedOK.Load() == 0 {
+		if !waitFirstSpawn(spawnSig, workers) {
 			walkCancel()
 		}
 	}()
@@ -171,13 +193,14 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 	prefix := make([]byte, 8192)
 	n, _ := io.ReadFull(rc, prefix)
 	prefix = prefix[:n]
-	if ok, _ := r.cfg.Filter.ShouldScan(job.Path, job.Size, prefix); !ok {
+	if ok, reason := r.cfg.Filter.ShouldScan(job.Path, job.Size, prefix); !ok {
 		r.scanCtx.BlobsSkipped.Add(1)
+		metrics.BlobsSkipped.WithLabelValues(r.cfg.ScanID, string(reason)).Inc()
 		return nil
 	}
 
 	// Build a multi-reader: prefix + remaining stream.
-	combined := io.MultiReader(bytesReader(prefix), rc)
+	combined := io.MultiReader(bytes.NewReader(prefix), rc)
 	scanner := chunk.NewLineScanner(combined, 1<<24)
 	builder := chunk.NewBuilder(chunk.BuilderConfig{
 		ScanID:             r.cfg.ScanID,
@@ -210,11 +233,16 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 	for _, c := range chunks {
 		c.SequenceNumber = r.scanCtx.ChunksPublished.Add(1) - 1
 		if err := r.cfg.Publisher.PublishChunk(ctx, c); err != nil {
+			metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "publish_chunk").Inc()
 			return err
 		}
+		metrics.ChunksPublished.WithLabelValues(r.cfg.ScanID, c.Kind.String()).Inc()
+		var chunkBytes int64
 		for _, row := range c.Rows {
-			r.scanCtx.BytesPublished.Add(int64(len(row.Content)))
+			chunkBytes += int64(len(row.Content))
 		}
+		r.scanCtx.BytesPublished.Add(chunkBytes)
+		metrics.BytesPublished.WithLabelValues(r.cfg.ScanID).Add(float64(chunkBytes))
 	}
 	return nil
 }
@@ -251,15 +279,18 @@ func (r *Runner) runDiff(ctx context.Context) error {
 		if p.Deleted {
 			continue
 		}
-		ok, _ := r.cfg.Filter.ShouldScan(p.Path, 0, nil)
+		ok, reason := r.cfg.Filter.ShouldScan(p.Path, 0, nil)
 		if !ok {
 			r.scanCtx.BlobsSkipped.Add(1)
+			metrics.BlobsSkipped.WithLabelValues(r.cfg.ScanID, string(reason)).Inc()
 			continue
 		}
 		if err := r.publishDiffPatch(ctx, commitSHA, p); err != nil {
 			r.scanCtx.Errors.Add(1)
+			metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "publish_diff").Inc()
 		} else {
 			r.scanCtx.BlobsScanned.Add(1)
+			metrics.BlobsScanned.WithLabelValues(r.cfg.ScanID).Inc()
 		}
 	}
 	return nil
@@ -289,8 +320,16 @@ func (r *Runner) publishDiffPatch(ctx context.Context, commitSHA []byte, p git.P
 		for _, c := range chunks {
 			c.SequenceNumber = r.scanCtx.ChunksPublished.Add(1) - 1
 			if err := r.cfg.Publisher.PublishChunk(ctx, c); err != nil {
+				metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "publish_chunk").Inc()
 				return err
 			}
+			metrics.ChunksPublished.WithLabelValues(r.cfg.ScanID, c.Kind.String()).Inc()
+			var chunkBytes int64
+			for _, row := range c.Rows {
+				chunkBytes += int64(len(row.Content))
+			}
+			r.scanCtx.BytesPublished.Add(chunkBytes)
+			metrics.BytesPublished.WithLabelValues(r.cfg.ScanID).Add(float64(chunkBytes))
 		}
 	}
 	return nil
@@ -299,6 +338,26 @@ func (r *Runner) publishDiffPatch(ctx context.Context, commitSHA []byte, p git.P
 func (r *Runner) finishWith(state v1.ScanState, runErr error) error {
 	_ = r.scanCtx.Transition(state)
 	return runErr
+}
+
+// terminalFor maps an error from a scan stage to its terminal scan state.
+// A cancelled / deadline-exceeded ctx means the scan was aborted from
+// outside (operator CancelScanRequest, or process shutdown) — that's
+// CANCELLED. Anything else is a real failure.
+func terminalFor(ctx context.Context, err error) v1.ScanState {
+	if err == nil {
+		return v1.ScanState_COMPLETED
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return v1.ScanState_CANCELLED
+	}
+	if ctx.Err() != nil {
+		// Stage returned a non-ctx error but the ctx is dead — most likely
+		// the stage observed the cancellation through a different code path
+		// (e.g. closed channel). Still a cancellation.
+		return v1.ScanState_CANCELLED
+	}
+	return v1.ScanState_FAILED
 }
 
 func (r *Runner) emitStatus(ctx context.Context, state v1.ScanState, msg string) {
@@ -316,20 +375,3 @@ func (r *Runner) emitStatus(ctx context.Context, state v1.ScanState, msg string)
 	}
 }
 
-// bytesReader is io.Reader over a []byte without depending on bytes.NewReader's
-// extra surface (kept inline to make the code self-contained).
-func bytesReader(b []byte) io.Reader { return &byteSliceReader{b: b} }
-
-type byteSliceReader struct {
-	b   []byte
-	off int
-}
-
-func (r *byteSliceReader) Read(p []byte) (int, error) {
-	if r.off >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.off:])
-	r.off += n
-	return n, nil
-}

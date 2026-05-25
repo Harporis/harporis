@@ -1,1 +1,7 @@
 bin/
+
+# Stray top-level binaries from earlier `make` runs
+/cmd/getter/getter
+/cmd/getter-cli/getter-cli
+/services/getter/getter
+/services/getter/getter-cli
