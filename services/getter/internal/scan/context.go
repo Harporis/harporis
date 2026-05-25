@@ -1,7 +1,6 @@
 package scan
 
 import (
-	"context"
 	"sync/atomic"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
@@ -17,6 +16,24 @@ type Context struct {
 	ChunksPublished atomic.Int64
 	BytesPublished  atomic.Int64
 	Errors          atomic.Int64
+
+	// CancelReason is set by registry.Cancel(id, reason) before the
+	// cancel func fires. Empty if cancellation came from process shutdown.
+	cancelReason atomic.Pointer[string]
+}
+
+// SetCancelReason stores the reason supplied by a CancelScanRequest so the
+// runner can surface it in the final status event. Safe to call concurrently.
+func (c *Context) SetCancelReason(reason string) {
+	c.cancelReason.Store(&reason)
+}
+
+// CancelReason returns the stored reason or "" if none was set.
+func (c *Context) CancelReason() string {
+	if p := c.cancelReason.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 func NewContext(id string) *Context {
@@ -40,8 +57,3 @@ func (c *Context) Snapshot() *v1.ScanMetrics {
 	}
 }
 
-// WithCancel wraps a context.Context so callers can cancel a scan from
-// a CancelScanRequest handler.
-func WithCancel(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithCancel(parent)
-}

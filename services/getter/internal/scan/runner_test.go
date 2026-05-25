@@ -232,6 +232,43 @@ func TestRunner_FinalStatusPublishedAfterCancel(t *testing.T) {
 	require.NotEmpty(t, pub.statuses, "final status event must be published even on cancelled ctx")
 }
 
+// When the scan's ctx is cancelled (operator-side cancel via
+// CancelScanRequest, or process shutdown), the runner must transition to
+// CANCELLED, not FAILED. Downstream services rely on the difference to
+// decide whether to retry vs garbage-collect.
+func TestRunner_CtxCancelLandsInCANCELLED(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a.go", "package main\n")
+	r.Commit("c1")
+
+	pub := &ctxAwarePublisher{}
+	flt := &filter.Filter{
+		PathExclusions:   []string{".git/"},
+		BinaryExtensions: map[string]struct{}{},
+		MaxFileSize:      int64(10 * 1024 * 1024),
+	}
+	runner := NewRunner(RunnerConfig{
+		ScanID:             "scan-cancel-state",
+		RepoDir:            r.Dir,
+		WalkMode:           "current_state",
+		Filter:             flt,
+		Publisher:          pub,
+		RowSizeTargetBytes: 1024,
+		Workers:            1,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before Run starts
+	_ = runner.Run(ctx)
+
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	require.NotEmpty(t, pub.statuses)
+	last := pub.statuses[len(pub.statuses)-1]
+	require.Equal(t, v1.ScanState_CANCELLED, last.State,
+		"a ctx-cancelled scan must terminate in CANCELLED, not FAILED")
+}
+
 // Prometheus counters defined in metrics/metrics.go must actually be
 // incremented during a scan — earlier they were declared but never used,
 // so /metrics returned mostly zeros regardless of scan activity.

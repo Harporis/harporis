@@ -74,7 +74,7 @@ func main() {
 
 	cancelSub, err := getnats.SubscribeCancel(rootCtx, cl.NC,
 		func(_ context.Context, req *v1.CancelScanRequest) {
-			registry.Cancel(req.ScanId)
+			registry.Cancel(req.ScanId, req.Reason)
 		})
 	if err != nil {
 		fatal("subscribe cancel: %v", err)

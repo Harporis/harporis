@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -70,29 +71,37 @@ func (r *Runner) Run(ctx context.Context) error {
 		defer cancel()
 		final := r.scanCtx.State()
 		metrics.ScanDuration.WithLabelValues(r.cfg.ScanID, final.String()).Observe(time.Since(startedAt).Seconds())
-		r.emitStatus(finalCtx, final, "scan finished")
+		msg := "scan finished"
+		if final == v1.ScanState_CANCELLED {
+			if reason := r.scanCtx.CancelReason(); reason != "" {
+				msg = "scan cancelled: " + reason
+			} else {
+				msg = "scan cancelled"
+			}
+		}
+		r.emitStatus(finalCtx, final, msg)
 	}()
 
 	switch r.cfg.WalkMode {
 	case "current_state":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkCurrentState}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "full_history":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkFullHistory}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "branch_full":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkBranchFull, Branch: r.cfg.Branch}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "commit_range":
 		if err := r.runBlobWalk(ctx, git.WalkArgs{Mode: git.WalkCommitRange, Range: r.cfg.Range}); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	case "branch_diff", "head_diff", "staged":
 		if err := r.runDiff(ctx); err != nil {
-			return r.finishWith(v1.ScanState_FAILED, err)
+			return r.finishWith(terminalFor(ctx, err), err)
 		}
 	default:
 		return r.finishWith(v1.ScanState_FAILED, fmt.Errorf("unknown walk mode %q", r.cfg.WalkMode))
@@ -329,6 +338,26 @@ func (r *Runner) publishDiffPatch(ctx context.Context, commitSHA []byte, p git.P
 func (r *Runner) finishWith(state v1.ScanState, runErr error) error {
 	_ = r.scanCtx.Transition(state)
 	return runErr
+}
+
+// terminalFor maps an error from a scan stage to its terminal scan state.
+// A cancelled / deadline-exceeded ctx means the scan was aborted from
+// outside (operator CancelScanRequest, or process shutdown) — that's
+// CANCELLED. Anything else is a real failure.
+func terminalFor(ctx context.Context, err error) v1.ScanState {
+	if err == nil {
+		return v1.ScanState_COMPLETED
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return v1.ScanState_CANCELLED
+	}
+	if ctx.Err() != nil {
+		// Stage returned a non-ctx error but the ctx is dead — most likely
+		// the stage observed the cancellation through a different code path
+		// (e.g. closed channel). Still a cancellation.
+		return v1.ScanState_CANCELLED
+	}
+	return v1.ScanState_FAILED
 }
 
 func (r *Runner) emitStatus(ctx context.Context, state v1.ScanState, msg string) {
