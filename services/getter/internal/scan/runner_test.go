@@ -231,3 +231,40 @@ func TestRunner_FinalStatusPublishedAfterCancel(t *testing.T) {
 	defer pub.mu.Unlock()
 	require.NotEmpty(t, pub.statuses, "final status event must be published even on cancelled ctx")
 }
+
+// Prometheus counters defined in metrics/metrics.go must actually be
+// incremented during a scan — earlier they were declared but never used,
+// so /metrics returned mostly zeros regardless of scan activity.
+func TestRunner_PrometheusCountersWired(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a.go", "package main\n// hello\n")
+	r.Write("img.png", "FAKEPNG")
+	r.Commit("c1")
+
+	pub := &fakePublisher{}
+	flt := &filter.Filter{
+		PathExclusions:   []string{".git/"},
+		BinaryExtensions: map[string]struct{}{".png": {}},
+		MaxFileSize:      int64(10 * 1024 * 1024),
+	}
+	runner := NewRunner(RunnerConfig{
+		ScanID:             "scan-metrics",
+		RepoDir:            r.Dir,
+		WalkMode:           "current_state",
+		Filter:             flt,
+		Publisher:          pub,
+		RowSizeTargetBytes: 1024,
+		Workers:            1,
+	})
+	require.NoError(t, runner.Run(context.Background()))
+
+	scanned := readCounterValue(t, "harporis_getter_blobs_scanned_total", "scan-metrics", "")
+	skipped := readCounterValue(t, "harporis_getter_blobs_skipped_total", "scan-metrics", "binary_extension")
+	chunks := readCounterValue(t, "harporis_getter_chunks_published_total", "scan-metrics", "BLOB")
+	bytes := readCounterValue(t, "harporis_getter_bytes_published_total", "scan-metrics", "")
+
+	require.GreaterOrEqual(t, scanned, 1.0, "blobs_scanned must reflect actual scans")
+	require.GreaterOrEqual(t, skipped, 1.0, "blobs_skipped by binary_extension must count img.png")
+	require.GreaterOrEqual(t, chunks, 1.0, "chunks_published must reflect emitted chunks")
+	require.Greater(t, bytes, 0.0, "bytes_published must reflect chunk row bytes")
+}

@@ -57,3 +57,7 @@ func Init() {
 func Handler() http.Handler {
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 }
+
+// Registry returns the custom registry so tests can Gather() metrics
+// directly. Returns nil if Init() has not been called.
+func Registry() *prometheus.Registry { return registry }

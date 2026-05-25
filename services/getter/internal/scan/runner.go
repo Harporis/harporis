@@ -59,6 +59,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 	r.emitStatus(ctx, v1.ScanState_RUNNING, "scan started")
+	startedAt := time.Now()
 
 	defer func() {
 		// Final status must reach downstream even if the scan was killed by
@@ -66,7 +67,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		// short-circuited by the already-cancelled scan ctx.
 		finalCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		r.emitStatus(finalCtx, r.scanCtx.State(), "scan finished")
+		final := r.scanCtx.State()
+		metrics.ScanDuration.WithLabelValues(r.cfg.ScanID, final.String()).Observe(time.Since(startedAt).Seconds())
+		r.emitStatus(finalCtx, final, "scan finished")
 	}()
 
 	switch r.cfg.WalkMode {
@@ -135,15 +138,18 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 			spawnSig <- true
 			defer batch.Close()
 			for job := range jobs {
-				ok, _ := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
+				ok, reason := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
 				if !ok {
 					r.scanCtx.BlobsSkipped.Add(1)
+					metrics.BlobsSkipped.WithLabelValues(r.cfg.ScanID, string(reason)).Inc()
 					continue
 				}
 				if err := r.processBlob(ctx, batch, job); err != nil {
 					r.scanCtx.Errors.Add(1)
+					metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "process_blob").Inc()
 				} else {
 					r.scanCtx.BlobsScanned.Add(1)
+					metrics.BlobsScanned.WithLabelValues(r.cfg.ScanID).Inc()
 				}
 			}
 		}()
@@ -177,8 +183,9 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 	prefix := make([]byte, 8192)
 	n, _ := io.ReadFull(rc, prefix)
 	prefix = prefix[:n]
-	if ok, _ := r.cfg.Filter.ShouldScan(job.Path, job.Size, prefix); !ok {
+	if ok, reason := r.cfg.Filter.ShouldScan(job.Path, job.Size, prefix); !ok {
 		r.scanCtx.BlobsSkipped.Add(1)
+		metrics.BlobsSkipped.WithLabelValues(r.cfg.ScanID, string(reason)).Inc()
 		return nil
 	}
 
@@ -216,11 +223,16 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 	for _, c := range chunks {
 		c.SequenceNumber = r.scanCtx.ChunksPublished.Add(1) - 1
 		if err := r.cfg.Publisher.PublishChunk(ctx, c); err != nil {
+			metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "publish_chunk").Inc()
 			return err
 		}
+		metrics.ChunksPublished.WithLabelValues(r.cfg.ScanID, c.Kind.String()).Inc()
+		var chunkBytes int64
 		for _, row := range c.Rows {
-			r.scanCtx.BytesPublished.Add(int64(len(row.Content)))
+			chunkBytes += int64(len(row.Content))
 		}
+		r.scanCtx.BytesPublished.Add(chunkBytes)
+		metrics.BytesPublished.WithLabelValues(r.cfg.ScanID).Add(float64(chunkBytes))
 	}
 	return nil
 }
@@ -257,15 +269,18 @@ func (r *Runner) runDiff(ctx context.Context) error {
 		if p.Deleted {
 			continue
 		}
-		ok, _ := r.cfg.Filter.ShouldScan(p.Path, 0, nil)
+		ok, reason := r.cfg.Filter.ShouldScan(p.Path, 0, nil)
 		if !ok {
 			r.scanCtx.BlobsSkipped.Add(1)
+			metrics.BlobsSkipped.WithLabelValues(r.cfg.ScanID, string(reason)).Inc()
 			continue
 		}
 		if err := r.publishDiffPatch(ctx, commitSHA, p); err != nil {
 			r.scanCtx.Errors.Add(1)
+			metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "publish_diff").Inc()
 		} else {
 			r.scanCtx.BlobsScanned.Add(1)
+			metrics.BlobsScanned.WithLabelValues(r.cfg.ScanID).Inc()
 		}
 	}
 	return nil
@@ -295,8 +310,16 @@ func (r *Runner) publishDiffPatch(ctx context.Context, commitSHA []byte, p git.P
 		for _, c := range chunks {
 			c.SequenceNumber = r.scanCtx.ChunksPublished.Add(1) - 1
 			if err := r.cfg.Publisher.PublishChunk(ctx, c); err != nil {
+				metrics.ErrorsTotal.WithLabelValues(r.cfg.ScanID, "publish_chunk").Inc()
 				return err
 			}
+			metrics.ChunksPublished.WithLabelValues(r.cfg.ScanID, c.Kind.String()).Inc()
+			var chunkBytes int64
+			for _, row := range c.Rows {
+				chunkBytes += int64(len(row.Content))
+			}
+			r.scanCtx.BytesPublished.Add(chunkBytes)
+			metrics.BytesPublished.WithLabelValues(r.cfg.ScanID).Add(float64(chunkBytes))
 		}
 	}
 	return nil
