@@ -1,0 +1,105 @@
+service:
+  name: getter
+  log_level: info
+
+grpc:
+  port: 50051
+  allow_local_start: false
+
+workspace:
+  work_dir: /var/lib/harporis/scans
+  cleanup_on_complete: true
+
+resources:
+  max_cpu_cores: 4
+  max_ram_mb: 512
+
+git:
+  clone_timeout_seconds: 600
+  cat_file_batch_buffer_kb: 64
+
+chunking:
+  row_size_target_kb: 256
+  row_overlap_lines: 64
+  diff_context_lines: 30
+  max_file_size_mb: 10
+
+filters:
+  path_exclusions:
+    - ".git/"
+    - "node_modules/"
+    - "vendor/"
+    - "dist/"
+    - "build/"
+    - "target/"
+    - ".next/"
+    - ".venv/"
+    - "__pycache__/"
+  binary_extensions:
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+    - ".gif"
+    - ".webp"
+    - ".ico"
+    - ".svg"
+    - ".pdf"
+    - ".zip"
+    - ".gz"
+    - ".tar"
+    - ".bz2"
+    - ".xz"
+    - ".7z"
+    - ".rar"
+    - ".lz"
+    - ".lzma"
+    - ".zst"
+    - ".exe"
+    - ".dll"
+    - ".so"
+    - ".dylib"
+    - ".class"
+    - ".jar"
+    - ".woff"
+    - ".woff2"
+    - ".ttf"
+    - ".otf"
+    - ".eot"
+    - ".mp3"
+    - ".mp4"
+    - ".mov"
+    - ".avi"
+    - ".flac"
+    - ".wav"
+    - ".mkv"
+    - ".webm"
+    - ".m4a"
+    - ".docx"
+    - ".xlsx"
+    - ".pptx"
+    - ".db"
+    - ".sqlite"
+    - ".sqlite3"
+    - ".mdb"
+    - ".iso"
+    - ".img"
+    - ".dmg"
+
+nats:
+  url: nats://localhost:4222
+  jetstream:
+    requests_stream: HARPORIS_REQUESTS
+    chunks_stream:   HARPORIS_CHUNKS
+    status_stream:   HARPORIS_STATUS
+    publish_ack_wait_seconds: 5
+  consumer:
+    requests_subject: harporis.scans.requests
+    cancel_subject:   harporis.scans.cancel
+    queue_group:      getter-pool
+    request_ack_wait_seconds: 60
+    max_in_flight_scans: 4
+
+allow_request_overrides:
+  - chunking.max_file_size_mb
+  - chunking.row_size_target_kb
+  - resources.max_ram_mb
