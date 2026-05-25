@@ -17,6 +17,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
@@ -27,7 +28,8 @@ require (
 )
 
 require (
-	github.com/Harporis/harporis/contracts v0.0.0
+	github.com/Harporis/harporis/contracts v0.1.0
+	github.com/Harporis/harporis/kit v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.14.1
 	github.com/nats-io/nats.go v1.52.0
@@ -39,4 +41,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-replace github.com/Harporis/harporis/contracts => ../../contracts
+replace (
+	github.com/Harporis/harporis/contracts => ../../contracts
+	github.com/Harporis/harporis/kit => ../../kit
+)
