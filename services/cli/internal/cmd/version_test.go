@@ -16,15 +16,18 @@ func TestVersionCommand(t *testing.T) {
 		version.Version, version.Commit, version.ProtoVersion = "dev", "unknown", "v1"
 	})
 
-	var buf bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	root := NewRootCmd()
-	root.SetOut(&buf)
-	root.SetErr(&buf)
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
 	root.SetArgs([]string{"version"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	got := buf.String()
+	got := stdout.String()
+	if stderr.Len() != 0 {
+		t.Errorf("unexpected stderr output: %s", stderr.String())
+	}
 	for _, want := range []string{"v9.9.9-test", "abcd123", "v1"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("version output missing %q: %s", want, got)

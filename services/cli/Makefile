@@ -4,7 +4,9 @@ PREFIX ?= /usr/local
 BIN     := bin/harporis
 PKG     := github.com/Harporis/harporis/services/cli
 
-VERSION := $(shell git describe --tags --dirty --always 2>/dev/null || echo dev)
+VERSION := $(shell git describe --tags --dirty --always --match 'cli/v*' 2>/dev/null || \
+                   git rev-parse --short HEAD 2>/dev/null || \
+                   echo dev)
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS := -s -w \
 	-X '$(PKG)/internal/version.Version=$(VERSION)' \
