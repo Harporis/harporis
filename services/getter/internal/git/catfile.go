@@ -2,6 +2,7 @@ package git
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ type BatchCheck struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
+	stderr *bytes.Buffer
 	mu     sync.Mutex
 }
 
@@ -40,10 +42,13 @@ func NewBatchCheck(ctx context.Context, repoDir string) (*BatchCheck, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Capture stderr so a dying cat-file leaves a trail in Close()'s error.
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &BatchCheck{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout)}, nil
+	return &BatchCheck{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout), stderr: stderr}, nil
 }
 
 func (b *BatchCheck) Lookup(sha string) (ObjectInfo, error) {
@@ -76,7 +81,13 @@ func (b *BatchCheck) Close() error {
 	if err := b.stdin.Close(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		return err
 	}
-	return b.cmd.Wait()
+	if err := b.cmd.Wait(); err != nil {
+		if msg := strings.TrimSpace(b.stderr.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 // Batch wraps `git cat-file --batch`. Returns content as an io.ReadCloser
@@ -85,6 +96,7 @@ type Batch struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
+	stderr *bytes.Buffer
 	mu     sync.Mutex
 }
 
@@ -98,10 +110,12 @@ func NewBatch(ctx context.Context, repoDir string) (*Batch, error) {
 	if err != nil {
 		return nil, err
 	}
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &Batch{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout)}, nil
+	return &Batch{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout), stderr: stderr}, nil
 }
 
 // Read sends sha to git cat-file and returns a reader scoped to that blob's
@@ -138,7 +152,13 @@ func (b *Batch) Close() error {
 	if err := b.stdin.Close(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		return err
 	}
-	return b.cmd.Wait()
+	if err := b.cmd.Wait(); err != nil {
+		if msg := strings.TrimSpace(b.stderr.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 // boundedReader exposes exactly N bytes from the parent reader, then consumes
