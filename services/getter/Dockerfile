@@ -12,17 +12,20 @@ WORKDIR /src
 # Pull deps first to leverage Docker's layer cache. go.mod/go.sum changes
 # trigger a re-download; source-only changes don't.
 COPY contracts/go.mod contracts/go.sum ./contracts/
+COPY kit/go.mod kit/go.sum ./kit/
 COPY services/getter/go.mod services/getter/go.sum ./services/getter/
 RUN --mount=type=cache,target=/go/pkg/mod \
     cd services/getter && go mod download
 
 # Now bring the source in.
 COPY contracts ./contracts
+COPY kit ./kit
 COPY services/getter ./services/getter
 
 # CGO_ENABLED=0 → fully static binary, ldflags strip debug info for smaller image.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    mkdir -p /out && \
     cd services/getter && \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/getter ./cmd/getter && \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/getter-cli ./cmd/getter-cli
