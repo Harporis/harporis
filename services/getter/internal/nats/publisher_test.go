@@ -51,3 +51,30 @@ func TestPublisher_PublishesChunkAndStatus(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(smsgs[0].Data, &st))
 	require.Equal(t, v1.ScanState_COMPLETED, st.State)
 }
+
+// Publishing the same chunk twice with the same ChunkId must result in
+// exactly one message in the stream — JetStream's per-message dedup
+// guarantees exactly-once on retry storms.
+func TestPublisher_DedupsByChunkID(t *testing.T) {
+	url, stop := testutil.StartEmbeddedNATS(t)
+	defer stop()
+
+	cl, err := wire.Dial(wire.DialConfig{URL: url, ClientName: "getter-dedup-test"})
+	require.NoError(t, err)
+	defer cl.Close()
+	require.NoError(t, wire.EnsureStreams(cl.JS))
+
+	pub := NewPublisher(cl.JS, 5)
+	chunk := &v1.GitRowChunk{
+		ScanId:  "scan-dedup",
+		ChunkId: "fixed-chunk-id-for-dedup",
+		Kind:    v1.ChunkKind_BLOB,
+		BlobSha: []byte("xyz"),
+	}
+	require.NoError(t, pub.PublishChunk(context.Background(), chunk))
+	require.NoError(t, pub.PublishChunk(context.Background(), chunk)) // retry
+
+	info, err := cl.JS.StreamInfo(wire.ChunksStream)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, info.State.Msgs, "second publish with same ChunkId must be deduped")
+}

@@ -26,7 +26,9 @@ func (p *Publisher) PublishChunk(ctx context.Context, c *v1.GitRowChunk) error {
 	if err != nil {
 		return fmt.Errorf("marshal chunk: %w", err)
 	}
-	return p.publishWithRetry(ctx, wire.ChunksSubject(c.ScanId), data)
+	// ChunkId is the JetStream dedup key: a retry of the same chunk (after
+	// network blip or backoff) lands as the same message, not a duplicate.
+	return p.publishWithRetry(ctx, wire.ChunksSubject(c.ScanId), data, c.ChunkId)
 }
 
 func (p *Publisher) PublishStatus(ctx context.Context, ev *v1.StatusEvent) error {
@@ -34,10 +36,13 @@ func (p *Publisher) PublishStatus(ctx context.Context, ev *v1.StatusEvent) error
 	if err != nil {
 		return fmt.Errorf("marshal status: %w", err)
 	}
-	return p.publishWithRetry(ctx, wire.StatusSubject(ev.ScanId), data)
+	// Status events are dedup'd by (scan_id, state, timestamp) — a retry of
+	// the same transition doesn't double-report.
+	msgID := fmt.Sprintf("%s:%s:%d", ev.ScanId, ev.State.String(), ev.Timestamp)
+	return p.publishWithRetry(ctx, wire.StatusSubject(ev.ScanId), data, msgID)
 }
 
-func (p *Publisher) publishWithRetry(ctx context.Context, subject string, data []byte) error {
+func (p *Publisher) publishWithRetry(ctx context.Context, subject string, data []byte, msgID string) error {
 	backoff := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 	var lastErr error
 	for i := 0; i < 3; i++ {
@@ -46,7 +51,11 @@ func (p *Publisher) publishWithRetry(ctx context.Context, subject string, data [
 			return ctx.Err()
 		default:
 		}
-		_, err := p.js.Publish(subject, data, nats.AckWait(p.ackWait))
+		opts := []nats.PubOpt{nats.AckWait(p.ackWait)}
+		if msgID != "" {
+			opts = append(opts, nats.MsgId(msgID))
+		}
+		_, err := p.js.Publish(subject, data, opts...)
 		if err == nil {
 			return nil
 		}
