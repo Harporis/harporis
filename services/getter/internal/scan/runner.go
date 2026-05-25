@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
@@ -62,8 +61,12 @@ func (r *Runner) Run(ctx context.Context) error {
 	r.emitStatus(ctx, v1.ScanState_RUNNING, "scan started")
 
 	defer func() {
-		// emit a final status reflecting whatever terminal state we reached
-		r.emitStatus(ctx, r.scanCtx.State(), "scan finished")
+		// Final status must reach downstream even if the scan was killed by
+		// ctx cancellation — use a fresh context so the publish is not
+		// short-circuited by the already-cancelled scan ctx.
+		finalCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		r.emitStatus(finalCtx, r.scanCtx.State(), "scan finished")
 	}()
 
 	switch r.cfg.WalkMode {
@@ -112,7 +115,12 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 	// Worker pool: each owns its own cat-file subprocess.
 	var wg sync.WaitGroup
 	workerErrs := make(chan error, workers)
-	var spawnedOK atomic.Int32
+	// Each worker writes exactly once to spawnSig: true on cat-file spawn
+	// success, false on failure. A coordinator goroutine waits on this and
+	// cancels the walker iff *all* workers fail to spawn — replacing a
+	// previous hard-coded 100ms watchdog that could fire prematurely on
+	// cold-start containers.
+	spawnSig := make(chan bool, workers)
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -120,10 +128,11 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 			defer wg.Done()
 			batch, err := git.NewBatch(ctx, r.cfg.RepoDir)
 			if err != nil {
+				spawnSig <- false
 				workerErrs <- fmt.Errorf("worker: spawn cat-file: %w", err)
 				return
 			}
-			spawnedOK.Add(1)
+			spawnSig <- true
 			defer batch.Close()
 			for job := range jobs {
 				ok, _ := r.cfg.Filter.ShouldScan(job.Path, job.Size, nil)
@@ -140,11 +149,8 @@ func (r *Runner) runBlobWalk(ctx context.Context, args git.WalkArgs) error {
 		}()
 	}
 
-	// Watchdog: if no workers ever succeeded in spawning, cancel the walker so
-	// it doesn't block forever sending into a channel with no consumer.
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		if spawnedOK.Load() == 0 {
+		if !waitFirstSpawn(spawnSig, workers) {
 			walkCancel()
 		}
 	}()

@@ -183,3 +183,51 @@ func TestRunner_StagedDiff(t *testing.T) {
 	}
 	require.True(t, hadDiff, "expected DIFF_WINDOW chunk for staged change in a.go")
 }
+
+// ctxAwarePublisher honours ctx in PublishStatus — i.e. behaves like the real
+// NATS publisher would when the scan ctx is cancelled.
+type ctxAwarePublisher struct {
+	fakePublisher
+}
+
+func (p *ctxAwarePublisher) PublishStatus(ctx context.Context, ev *v1.StatusEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return p.fakePublisher.PublishStatus(ctx, ev)
+}
+
+// The final status event (CANCELLED/FAILED/COMPLETED) must reach downstream
+// even when the scan's own ctx was the thing that cancelled the scan.
+// Otherwise consumers never learn the scan stopped.
+func TestRunner_FinalStatusPublishedAfterCancel(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a.go", "package main\n")
+	r.Commit("c1")
+
+	pub := &ctxAwarePublisher{}
+	flt := &filter.Filter{
+		PathExclusions:   []string{".git/"},
+		BinaryExtensions: map[string]struct{}{},
+		MaxFileSize:      int64(10 * 1024 * 1024),
+	}
+	runner := NewRunner(RunnerConfig{
+		ScanID:             "scan-cancelled",
+		RepoDir:            r.Dir,
+		WalkMode:           "current_state",
+		Filter:             flt,
+		Publisher:          pub,
+		RowSizeTargetBytes: 1024,
+		Workers:            1,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before Run — every publish on this ctx would fail
+	_ = runner.Run(ctx)
+
+	// The deferred final emitStatus must have used a fresh context, otherwise
+	// no status event ever reaches the publisher under cancelled-scan path.
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	require.NotEmpty(t, pub.statuses, "final status event must be published even on cancelled ctx")
+}
