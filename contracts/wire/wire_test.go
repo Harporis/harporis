@@ -35,7 +35,11 @@ func TestDial_EnsureStreams_Idempotent(t *testing.T) {
 
 	info, err := cl.JS.StreamInfo(wire.RequestsStream)
 	require.NoError(t, err)
-	require.Contains(t, info.Config.Subjects, "harporis.scans.>")
+	// RequestsStream must capture only the requests subject. The cancel
+	// subject is a broadcast on core NATS — if we also stored cancels here
+	// (WorkQueuePolicy + no consumer matching that filter), they'd pile up.
+	require.Equal(t, []string{wire.ScansRequestsSubject}, info.Config.Subjects)
+	require.NotContains(t, info.Config.Subjects, wire.ScansCancelSubject)
 }
 
 func TestSubjectBuilders(t *testing.T) {
