@@ -37,6 +37,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newScanCmd())
 	root.AddCommand(newCancelCmd())
 	root.AddCommand(newWatchCmd())
+	root.AddCommand(newHistoryCmd())
 	return root
 }
 
