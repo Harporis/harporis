@@ -32,6 +32,7 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolP("quiet", "q", false, "suppress banner and secondary output")
 
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newScanCmd())
 	return root
 }
 

@@ -3,11 +3,14 @@ module github.com/Harporis/harporis/services/cli
 go 1.26
 
 require (
+	github.com/Harporis/harporis/contracts v0.0.0-00010101000000-000000000000
 	github.com/Harporis/harporis/kit v0.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/google/uuid v1.6.0
 	github.com/muesli/termenv v0.16.0
 	github.com/nats-io/nats-server/v2 v2.14.1
 	github.com/spf13/cobra v1.10.2
+	google.golang.org/protobuf v1.36.11
 )
 
 replace (
@@ -37,6 +40,10 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
+	google.golang.org/grpc v1.81.1 // indirect
 )
