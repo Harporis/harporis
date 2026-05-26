@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,9 +15,10 @@ import (
 // NewRootCmd builds a fresh root command. Used by main and by tests.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:          "harporis",
-		Short:        "git-aware secret hunter — operator CLI",
-		SilenceUsage: true,
+		Use:           "harporis",
+		Short:         "git-aware secret hunter — operator CLI",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		Run: func(cmd *cobra.Command, _ []string) {
 			quiet, _ := cmd.Flags().GetBool("quiet")
 			if !quiet {
@@ -33,12 +35,21 @@ func NewRootCmd() *cobra.Command {
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newScanCmd())
+	root.AddCommand(newCancelCmd())
+	root.AddCommand(newWatchCmd())
 	return root
 }
 
-// Execute is the package-level entry point used by main.
+// Execute is the package-level entry point used by main. Translates
+// typed exitErrors into the matching process exit code.
 func Execute() {
 	if err := NewRootCmd().Execute(); err != nil {
+		var ex interface{ ExitCode() int }
+		if errors.As(err, &ex) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(ex.ExitCode())
+		}
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,9 +83,3 @@ func newScanCmd() *cobra.Command {
 	return c
 }
 
-// StreamStatusLines is a placeholder until Task 6 wires the real
-// line-based status follower. Until then, --no-wait is the only sane
-// option after a scan submit.
-func StreamStatusLines(_ io.Writer, _ *natscli.Client, _ string, _ time.Duration) error {
-	return nil
-}

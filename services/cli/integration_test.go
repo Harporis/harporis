@@ -5,6 +5,7 @@ package cli_test
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,5 +85,87 @@ func TestScanPublishesRequest(t *testing.T) {
 	}
 	if req.ScanId != "it-1" || req.GetSource().GetLocalPath() != "/repos/demo" {
 		t.Fatalf("unexpected: %+v", &req)
+	}
+}
+
+func TestCancelPublishesRequest(t *testing.T) {
+	srv := runJSServer(t)
+	bin := buildBinary(t)
+
+	nc, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	sub, err := nc.SubscribeSync(wire.ScansCancelSubject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Unsubscribe()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin,
+		"--nats", srv.ClientURL(),
+		"cancel", "scan-xyz",
+		"--reason", "operator changed mind",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("cancel exec: %v\n%s", err, out)
+	}
+
+	msg, err := sub.NextMsg(2 * time.Second)
+	if err != nil {
+		t.Fatalf("recv: %v", err)
+	}
+	var req v1.CancelScanRequest
+	if err := proto.Unmarshal(msg.Data, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.ScanId != "scan-xyz" || req.Reason != "operator changed mind" {
+		t.Fatalf("unexpected: %+v", &req)
+	}
+}
+
+func TestWatchReceivesTerminalStatus(t *testing.T) {
+	srv := runJSServer(t)
+	bin := buildBinary(t)
+
+	nc, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wire.EnsureStreams(js); err != nil {
+		t.Fatal(err)
+	}
+
+	scanID := "watch-it-1"
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		data, _ := proto.Marshal(&v1.StatusEvent{
+			ScanId:    scanID,
+			State:     v1.ScanState_COMPLETED,
+			Message:   "scan finished",
+			Timestamp: time.Now().Unix(),
+		})
+		_, _ = js.Publish(wire.StatusSubject(scanID), data)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin,
+		"--nats", srv.ClientURL(),
+		"watch", scanID,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("watch exec: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "COMPLETED") {
+		t.Fatalf("watch output missing COMPLETED:\n%s", out)
 	}
 }
