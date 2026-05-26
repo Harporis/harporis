@@ -2,9 +2,13 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Harporis/harporis/services/cli/internal/ui"
+	"github.com/Harporis/harporis/services/cli/internal/version"
 )
 
 // NewRootCmd builds a fresh root command. Used by main and by tests.
@@ -13,6 +17,14 @@ func NewRootCmd() *cobra.Command {
 		Use:          "harporis",
 		Short:        "git-aware secret hunter — operator CLI",
 		SilenceUsage: true,
+		Run: func(cmd *cobra.Command, _ []string) {
+			quiet, _ := cmd.Flags().GetBool("quiet")
+			if !quiet {
+				natsURL, _ := cmd.Flags().GetString("nats")
+				fmt.Fprint(cmd.OutOrStdout(), ui.Banner(version.Version, version.ProtoVersion, natsURL))
+			}
+			_ = cmd.Help()
+		},
 	}
 	root.PersistentFlags().String("nats", defaultNATSURL(), "NATS server URL (env NATS_URL)")
 	root.PersistentFlags().Bool("no-color", false, "disable ANSI styling (env NO_COLOR)")

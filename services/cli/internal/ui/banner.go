@@ -1,0 +1,28 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+)
+
+const wordmark = `     ██╗  ██╗ █████╗ ██████╗ ██████╗  ██████╗ ██████╗ ██╗███████╗
+     ██║  ██║██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔══██╗██║██╔════╝
+     ███████║███████║██████╔╝██████╔╝██║   ██║██████╔╝██║███████╗
+     ██╔══██║██╔══██║██╔══██╗██╔═══╝ ██║   ██║██╔══██╗██║╚════██║
+     ██║  ██║██║  ██║██║  ██║██║     ╚██████╔╝██║  ██║██║███████║
+     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝╚══════╝`
+
+// Banner renders the brand wordmark and a dynamic bottom bar with
+// version, proto contract version, and the configured NATS URL.
+func Banner(version, proto, natsURL string) string {
+	tagline := "git-aware secret hunter ▸ red ∙ blue ∙ purple"
+	bottom := fmt.Sprintf("%s · proto %s · %s", version, proto, natsURL)
+	var b strings.Builder
+	b.WriteString(BrandStyle.Render(wordmark))
+	b.WriteString("\n")
+	b.WriteString(DimStyle.Render("          " + tagline))
+	b.WriteString("\n")
+	b.WriteString(DimStyle.Render("          " + bottom))
+	b.WriteString("\n")
+	return b.String()
+}

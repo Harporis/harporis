@@ -20,7 +20,7 @@ func TestVersionCommand(t *testing.T) {
 	root := NewRootCmd()
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetArgs([]string{"version"})
+	root.SetArgs([]string{"--quiet", "version"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
