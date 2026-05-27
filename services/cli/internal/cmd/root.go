@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Harporis/harporis/services/cli/internal/config"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 	"github.com/Harporis/harporis/services/cli/internal/version"
 )
@@ -32,6 +33,26 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().Bool("no-color", false, "disable ANSI styling (env NO_COLOR)")
 	root.PersistentFlags().Bool("json", false, "machine-readable JSON output on read commands")
 	root.PersistentFlags().BoolP("quiet", "q", false, "suppress banner and secondary output")
+	root.PersistentFlags().String("config", "", "config file path (default: ~/.config/harporis/config.yaml)")
+
+	// Load config before any subcommand runs; explicit flags win.
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		cfgPath, _ := cmd.Flags().GetString("config")
+		if cfgPath == "" {
+			cfgPath = config.DefaultPath()
+			if cfgPath == "" {
+				return nil
+			}
+		}
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			return err
+		}
+		if !root.PersistentFlags().Changed("nats") {
+			_ = root.PersistentFlags().Set("nats", cfg.NATSURL)
+		}
+		return nil
+	}
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newScanCmd())
