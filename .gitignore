@@ -39,3 +39,4 @@ bin/
 /cmd/getter-cli/getter-cli
 /services/getter/getter
 /services/getter/getter-cli
+services/cli/completions/

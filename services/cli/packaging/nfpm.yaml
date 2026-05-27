@@ -1,0 +1,29 @@
+name: harporis
+version: ${HARPORIS_VERSION}
+section: utils
+priority: optional
+maintainer: Harporis Team <maintainers@harporis.local>
+description: |
+  Git-aware secret hunter — operator CLI.
+  Submits scan requests to a Harporis NATS cluster, watches status
+  events in a live dashboard, manages the local docker compose stack,
+  runs diagnostics.
+vendor: Harporis
+homepage: https://github.com/Harporis/harporis
+license: Apache-2.0
+
+contents:
+  - src: ./bin/harporis
+    dst: /usr/bin/harporis
+    file_info:
+      mode: 0755
+  - src: ./completions/harporis.bash
+    dst: /usr/share/bash-completion/completions/harporis
+  - src: ./completions/_harporis
+    dst: /usr/share/zsh/vendor-completions/_harporis
+  - src: ./completions/harporis.fish
+    dst: /usr/share/fish/vendor_completions.d/harporis.fish
+
+deb:
+  fields:
+    Recommends: docker.io
