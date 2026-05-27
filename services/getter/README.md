@@ -390,7 +390,7 @@ SIGTERM / SIGINT cancels the root context. In-flight scans see the cancel and pr
 
 | # | Topic | Status |
 |---|-------|--------|
-| 1 | No built-in CLI to encode/submit `ScanRequest` — use `nats pub` with a hand-rolled proto encoder for now. | Will add `cmd/getter-cli` in v2. |
+| 1 | ~~No built-in CLI to encode/submit `ScanRequest`~~ | Resolved — `services/cli` provides the `harporis` CLI. |
 | 2 | `DIFF_WINDOW` chunks scan only added + context lines. Deleted lines are intentionally discarded (per [`internal/git/diff.go` ParseUnifiedDiff doc-comment](internal/git/diff.go)). | Intentional. |
 | 3 | `FULL_HISTORY` `BlobJob.Refs` carries only first-seen commit, not all commits where the blob appears. Multi-commit reporting needs a second pass. | Spec'd for v2. |
 | 4 | `git.cat_file_batch_buffer_kb` config field is reserved but not currently consumed. | Will wire when we add a custom-buffered stdout reader for cat-file. |

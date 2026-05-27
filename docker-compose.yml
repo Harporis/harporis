@@ -7,8 +7,9 @@
 # Scan a host repo with the CLI:
 #   1) mount the repo into the getter container by adding a volume below:
 #        - ./my-repo:/repos/my-repo:ro
-#   2) submit a scan from the host:
-#        ./services/getter/bin/getter-cli scan --local /repos/my-repo --wait
+#   2) submit a scan from the host (install the CLI via
+#      `cd services/cli && make install`):
+#        harporis scan --local /repos/my-repo
 #      (path is what the getter sees inside the container, NOT the host path).
 
 services:
@@ -52,7 +53,7 @@ services:
       - getter-work:/var/lib/harporis/scans
       # Add host paths here to scan local repositories. The path on the
       # right side is what the getter sees and what you pass to
-      # `getter-cli scan --local`.
+      # `harporis scan --local`.
       - /tmp/demo-repo:/repos/demo:ro
     restart: unless-stopped
 

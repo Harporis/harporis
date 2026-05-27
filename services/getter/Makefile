@@ -1,12 +1,9 @@
-.PHONY: build build-getter build-cli test lint run clean
+.PHONY: build build-getter test lint run clean
 
-build: build-getter build-cli
+build: build-getter
 
 build-getter:
 	go build -o bin/getter ./cmd/getter
-
-build-cli:
-	go build -o bin/getter-cli ./cmd/getter-cli
 
 test:
 	go test ./... -race -timeout 90s

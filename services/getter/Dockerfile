@@ -27,8 +27,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     mkdir -p /out && \
     cd services/getter && \
-    CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/getter ./cmd/getter && \
-    CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/getter-cli ./cmd/getter-cli
+    CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/getter ./cmd/getter
 
 # ---------- runtime ----------
 FROM alpine:3.20
@@ -43,7 +42,6 @@ RUN apk add --no-cache git ca-certificates openssh-client && \
     chown -R harporis:harporis /var/lib/harporis /home/harporis
 
 COPY --from=build /out/getter /usr/local/bin/getter
-COPY --from=build /out/getter-cli /usr/local/bin/getter-cli
 COPY services/getter/config /etc/harporis
 
 USER harporis
