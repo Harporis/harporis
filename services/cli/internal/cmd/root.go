@@ -44,6 +44,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newHealthCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newMetricsCmd())
 	return root
 }
 
