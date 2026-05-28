@@ -40,3 +40,6 @@ bin/
 /services/getter/getter
 /services/getter/getter-cli
 services/cli/completions/
+
+# Local docker-compose extensions (per-developer repo mounts, etc.)
+docker-compose.override.yml

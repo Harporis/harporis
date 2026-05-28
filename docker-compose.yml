@@ -1,15 +1,19 @@
 # Local dev stack: NATS (JetStream) + Harporis getter, both in containers.
 # The CLI runs on the host and talks to NATS at localhost:4222.
 #
-# Bring up:    docker compose up --build
+# Bring up:    docker compose up --build -d
 # Tear down:   docker compose down -v
 #
 # Scan a host repo with the CLI:
-#   1) mount the repo into the getter container by adding a volume below:
-#        - ./my-repo:/repos/my-repo:ro
-#   2) submit a scan from the host (install the CLI via
-#      `cd services/cli && make install`):
-#        harporis scan --local /repos/my-repo
+#   1) Add a volume by creating docker-compose.override.yml (gitignored):
+#
+#        services:
+#          getter:
+#            volumes:
+#              - /path/to/your/repo:/repos/myrepo:ro
+#
+#   2) `docker compose up -d --no-deps getter`  (re-creates only getter)
+#   3) `harporis scan --local /repos/myrepo`
 #      (path is what the getter sees inside the container, NOT the host path).
 
 services:
@@ -51,10 +55,9 @@ services:
       - "50051:50051"  # gRPC Health
     volumes:
       - getter-work:/var/lib/harporis/scans
-      # Add host paths here to scan local repositories. The path on the
-      # right side is what the getter sees and what you pass to
-      # `harporis scan --local`.
-      - /tmp/demo-repo:/repos/demo:ro
+      # Host repos to scan go in docker-compose.override.yml — see the
+      # comment block at the top of this file. Do not hardcode host
+      # paths here; they vary per developer.
     restart: unless-stopped
 
 volumes:
