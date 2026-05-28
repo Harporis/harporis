@@ -21,14 +21,24 @@ secrets and other sensitive patterns at scale.
 
 ## Quick start
 
-```bash
-make stack-up         # docker compose up -d (NATS + getter)
-make cli-install      # install harporis to /usr/local/bin
+One-liner — installs Go (if needed), Docker (with confirmation, if
+needed), builds harporis, configures shell completion, runs `doctor`:
 
-harporis doctor                   # verify environment
-harporis scan --local /repos/demo # run a scan with live dashboard
-harporis ps                       # check stack
+```bash
+bash scripts/install.sh
 ```
+
+Then:
+
+```bash
+exec $SHELL                       # pick up updated PATH + completion
+make stack-up                     # docker compose up -d (NATS + getter)
+harporis doctor                   # 4/4 OK?
+harporis scan --local /repos/demo # run a scan with live dashboard
+```
+
+Default install location is `~/.local/bin` (no sudo). For system-wide:
+`PREFIX=/usr/local sudo -E bash scripts/install.sh`.
 
 For a hands-on walkthrough see [`services/getter/QUICKSTART.md`](services/getter/QUICKSTART.md).
 For CLI install options and the full command tour see [`services/cli/README.md`](services/cli/README.md).
