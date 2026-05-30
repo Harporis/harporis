@@ -22,6 +22,13 @@ const (
 	WriterPoolQueueGroup    = "writer-pool"
 )
 
+// Wildcard subjects for cross-scan subscribers (history, audit, etc.).
+const (
+	ChunksWildcardSubject   = "harporis.chunks.>"
+	StatusWildcardSubject   = "harporis.status.>"
+	FindingsWildcardSubject = "harporis.findings.>"
+)
+
 // Per-scan subject builders.
 func ChunksSubject(scanID string) string   { return "harporis.chunks." + scanID }
 func StatusSubject(scanID string) string   { return "harporis.status." + scanID }

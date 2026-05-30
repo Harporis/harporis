@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -22,7 +23,7 @@ func TestFetchAndFilterPrintsMatches(t *testing.T) {
 	defer srv.Close()
 
 	var buf bytes.Buffer
-	if err := fetchAndPrintMetrics(srv.URL, "^harporis_", &buf); err != nil {
+	if err := fetchAndPrintMetrics(srv.URL, regexp.MustCompile("^harporis_"), &buf); err != nil {
 		t.Fatal(err)
 	}
 	got := buf.String()

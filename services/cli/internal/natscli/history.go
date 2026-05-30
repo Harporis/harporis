@@ -19,9 +19,10 @@ import (
 // total time.
 func (c *Client) ListHistory(maxScans int, wait time.Duration) ([]*v1.StatusEvent, error) {
 	consumer := fmt.Sprintf("cli-history-%d", time.Now().UnixNano())
-	sub, err := c.JS.PullSubscribe("harporis.status.>", consumer,
+	sub, err := c.JS.PullSubscribe(wire.StatusWildcardSubject, consumer,
 		natsclient.BindStream(wire.StatusStream),
-		natsclient.DeliverAll())
+		natsclient.DeliverAll(),
+		natsclient.InactiveThreshold(30*time.Second))
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +70,8 @@ func (c *Client) ShowHistory(scanID string, wait time.Duration) ([]*v1.StatusEve
 	consumer := fmt.Sprintf("cli-history-show-%s-%d", SanitizeConsumerName(scanID), time.Now().UnixNano())
 	sub, err := c.JS.PullSubscribe(wire.StatusSubject(scanID), consumer,
 		natsclient.BindStream(wire.StatusStream),
-		natsclient.DeliverAll())
+		natsclient.DeliverAll(),
+		natsclient.InactiveThreshold(30*time.Second))
 	if err != nil {
 		return nil, err
 	}

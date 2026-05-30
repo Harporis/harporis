@@ -91,7 +91,7 @@ func newHistoryShowCmd() *cobra.Command {
 				return nil
 			}
 			for _, e := range evs {
-				printStatusLine(cmd.OutOrStdout(), e)
+				ui.PrintStatusLine(cmd.OutOrStdout(), e)
 			}
 			return nil
 		},

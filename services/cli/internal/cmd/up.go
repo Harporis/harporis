@@ -19,6 +19,14 @@ import (
 	"github.com/Harporis/harporis/services/cli/internal/version"
 )
 
+// stackStep is one named action in the `up` checklist. Splitting the
+// orchestration into a slice keeps adding/reordering steps to a
+// one-liner instead of editing an index-coupled closure.
+type stackStep struct {
+	label string
+	run   func() error
+}
+
 func newUpCmd() *cobra.Command {
 	var build bool
 	c := &cobra.Command{
@@ -33,49 +41,45 @@ func newUpCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			steps := []string{
-				"docker compose up",
-				"NATS container started",
-				"NATS /healthz",
-				"getter container",
-				"getter NATS connection",
+			steps := []stackStep{
+				{label: "docker compose up", run: func() error { _, err := cp.Up(context.Background(), build); return err }},
+				{label: "NATS /healthz", run: func() error { return waitHTTPOK("http://localhost:8222/healthz", 30*time.Second) }},
+				{label: "getter NATS reachable", run: func() error { return waitNATSReachable(natsURL, 15*time.Second) }},
 			}
+			labels := make([]string, len(steps))
+			for i, s := range steps {
+				labels[i] = s.label
+			}
+
 			if useTUI {
 				fmt.Fprint(cmd.OutOrStdout(), ui.Banner(version.Version, version.ProtoVersion, natsURL))
-			}
-			runner := func(n tui.StepNotifier) {
-				started := time.Now()
-				_, err := cp.Up(context.Background(), build)
-				n.Done(0, err == nil, took(started), errStr(err))
-				if err != nil {
-					return
-				}
-				n.Done(1, true, "0.2s", "")
-				started = time.Now()
-				err = waitHTTPOK("http://localhost:8222/healthz", 30*time.Second)
-				n.Done(2, err == nil, took(started), errStr(err))
-				if err != nil {
-					return
-				}
-				n.Done(3, true, "0.2s", "")
-				started = time.Now()
-				err = waitNATSReachable(natsURL, 15*time.Second)
-				n.Done(4, err == nil, took(started), errStr(err))
-			}
-			if useTUI {
-				p := tea.NewProgram(tui.NewUpModel(steps))
-				go runner(programNotifier{p: p})
+				p := tea.NewProgram(tui.NewUpModel(labels))
+				go runSteps(steps, programNotifier{p: p})
 				if _, perr := p.Run(); perr != nil {
 					return perr
 				}
 				return nil
 			}
-			runner(stdoutNotifier{w: cmd.OutOrStdout(), steps: steps})
+			runSteps(steps, stdoutNotifier{w: cmd.OutOrStdout(), steps: labels})
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&build, "build", false, "rebuild images before starting")
 	return c
+}
+
+// runSteps drives a slice of stackStep through a StepNotifier, stopping
+// on the first failure so downstream steps don't run against a broken
+// pre-condition.
+func runSteps(steps []stackStep, n tui.StepNotifier) {
+	for i, s := range steps {
+		started := time.Now()
+		err := s.run()
+		n.Done(i, err == nil, took(started), errStr(err))
+		if err != nil {
+			return
+		}
+	}
 }
 
 type programNotifier struct{ p *tea.Program }

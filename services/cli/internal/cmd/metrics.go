@@ -21,11 +21,15 @@ func newMetricsCmd() *cobra.Command {
 		Use:   "metrics",
 		Short: "fetch and filter the getter's Prometheus /metrics",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			re, err := regexp.Compile(filter)
+			if err != nil {
+				return fmt.Errorf("bad --filter: %w", err)
+			}
 			if !watch {
-				return fetchAndPrintMetrics(url, filter, cmd.OutOrStdout())
+				return fetchAndPrintMetrics(url, re, cmd.OutOrStdout())
 			}
 			for {
-				if err := fetchAndPrintMetrics(url, filter, cmd.OutOrStdout()); err != nil {
+				if err := fetchAndPrintMetrics(url, re, cmd.OutOrStdout()); err != nil {
 					fmt.Fprintln(cmd.ErrOrStderr(), err)
 				}
 				time.Sleep(2 * time.Second)
@@ -38,11 +42,7 @@ func newMetricsCmd() *cobra.Command {
 	return c
 }
 
-func fetchAndPrintMetrics(url, filter string, w io.Writer) error {
-	re, err := regexp.Compile(filter)
-	if err != nil {
-		return fmt.Errorf("bad --filter: %w", err)
-	}
+func fetchAndPrintMetrics(url string, re *regexp.Regexp, w io.Writer) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		return fmt.Errorf("get %s: %w", url, err)

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,12 +11,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-isatty"
-	natsclient "github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/proto"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
-	"github.com/Harporis/harporis/kit/nats/wire"
 	"github.com/Harporis/harporis/services/cli/internal/natscli"
 	"github.com/Harporis/harporis/services/cli/internal/tui"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
@@ -55,16 +51,11 @@ func newWatchCmd() *cobra.Command {
 // ctrl+c. Returns nil on success, a typed *exitError on FAILED/CANCELLED
 // or on subscribe failure.
 func RunWatchTUI(cl *natscli.Client, scanID string, idle time.Duration) error {
-	consumer := "cli-watch-" + natscli.SanitizeConsumerName(scanID)
-	sub, err := cl.JS.PullSubscribe(wire.StatusSubject(scanID), consumer,
-		natsclient.BindStream(wire.StatusStream))
+	sub, cleanup, err := cl.SubscribeStatus(scanID)
 	if err != nil {
-		return fmt.Errorf("subscribe status: %w", err)
+		return err
 	}
-	defer func() {
-		_ = sub.Unsubscribe()
-		_ = cl.JS.DeleteConsumer(wire.StatusStream, consumer)
-	}()
+	defer cleanup()
 
 	p := tea.NewProgram(tui.NewWatchModel(scanID), tea.WithAltScreen())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -77,23 +68,17 @@ func RunWatchTUI(cl *natscli.Client, scanID string, idle time.Duration) error {
 				p.Send(tui.SubscribeErrMsg{Err: fmt.Errorf("idle timeout %s", idle)})
 				return
 			}
-			msgs, err := sub.Fetch(8, natsclient.MaxWait(2*time.Second))
+			events, err := natscli.FetchStatusEvents(sub, 2*time.Second)
 			if err != nil {
-				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, natsclient.ErrTimeout) {
-					continue
-				}
 				p.Send(tui.SubscribeErrMsg{Err: err})
 				return
 			}
-			for _, m := range msgs {
-				lastSeen = time.Now()
-				var ev v1.StatusEvent
-				if err := proto.Unmarshal(m.Data, &ev); err != nil {
-					_ = m.Ack()
-					continue
-				}
-				p.Send(tui.StatusEventMsg{Ev: &ev})
-				_ = m.Ack()
+			if len(events) == 0 {
+				continue
+			}
+			lastSeen = time.Now()
+			for _, ev := range events {
+				p.Send(tui.StatusEventMsg{Ev: ev})
 			}
 		}
 	}()
@@ -110,19 +95,14 @@ func RunWatchTUI(cl *natscli.Client, scanID string, idle time.Duration) error {
 
 // StreamStatusLines follows the JetStream status subject for one scan
 // and prints colored lines per event. Returns nil on success states,
-// a typed exitError for FAILED/CANCELLED so cobra can map to exit code 3,
-// or an idle-timeout error mapped to 124.
+// a typed exitError for FAILED/CANCELLED (code 3), or for an idle
+// timeout (code 124).
 func StreamStatusLines(out io.Writer, cl *natscli.Client, scanID string, idleTimeout time.Duration) error {
-	consumer := "cli-watch-" + natscli.SanitizeConsumerName(scanID)
-	sub, err := cl.JS.PullSubscribe(wire.StatusSubject(scanID), consumer,
-		natsclient.BindStream(wire.StatusStream))
+	sub, cleanup, err := cl.SubscribeStatus(scanID)
 	if err != nil {
-		return fmt.Errorf("subscribe status: %w", err)
+		return err
 	}
-	defer func() {
-		_ = sub.Unsubscribe()
-		_ = cl.JS.DeleteConsumer(wire.StatusStream, consumer)
-	}()
+	defer cleanup()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -132,48 +112,19 @@ func StreamStatusLines(out io.Writer, cl *natscli.Client, scanID string, idleTim
 		if time.Since(lastSeen) > idleTimeout {
 			return &exitError{code: 124, msg: fmt.Sprintf("idle timeout (%s) — no status events for %s", idleTimeout, scanID)}
 		}
-		msgs, err := sub.Fetch(8, natsclient.MaxWait(2*time.Second))
+		events, err := natscli.FetchStatusEvents(sub, 2*time.Second)
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, natsclient.ErrTimeout) {
-				continue
-			}
 			return fmt.Errorf("watch fetch: %w", err)
 		}
-		for _, m := range msgs {
+		for _, ev := range events {
 			lastSeen = time.Now()
-			var ev v1.StatusEvent
-			if err := proto.Unmarshal(m.Data, &ev); err != nil {
-				fmt.Fprintf(out, "watch unmarshal: %v\n", err)
-				_ = m.Ack()
-				continue
-			}
-			printStatusLine(out, &ev)
-			_ = m.Ack()
-			if isTerminal(ev.State) {
+			ui.PrintStatusLine(out, ev)
+			if tui.IsTerminal(ev.State) {
 				return terminalExitCode(ev.State)
 			}
 		}
 	}
 	return nil
-}
-
-func printStatusLine(out io.Writer, ev *v1.StatusEvent) {
-	ts := time.Unix(ev.Timestamp, 0).UTC().Format(time.RFC3339)
-	state := ui.StateStyle(ev.State.String()).Render(ev.State.String())
-	m := ev.GetMetrics()
-	fmt.Fprintf(out, "[%s] %-9s | %s | scanned=%d skipped=%d chunks=%d bytes=%d errors=%d\n",
-		ts, state, ev.Message,
-		m.GetBlobsScanned(), m.GetBlobsSkipped(),
-		m.GetChunksPublished(), m.GetBytesPublished(), m.GetErrorsTotal())
-}
-
-func isTerminal(s v1.ScanState) bool {
-	switch s {
-	case v1.ScanState_COMPLETED, v1.ScanState_FAILED,
-		v1.ScanState_CANCELLED, v1.ScanState_PARTIAL:
-		return true
-	}
-	return false
 }
 
 // terminalExitCode returns nil for success states and a typed exitError
@@ -185,12 +136,3 @@ func terminalExitCode(s v1.ScanState) error {
 	}
 	return nil
 }
-
-// exitError is consumed by Execute() in root.go to set the process exit code.
-type exitError struct {
-	code int
-	msg  string
-}
-
-func (e *exitError) Error() string { return e.msg }
-func (e *exitError) ExitCode() int { return e.code }

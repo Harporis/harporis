@@ -78,21 +78,23 @@ func (m WatchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = v.Ev.State
 		m.message = v.Ev.Message
 		m.lastEvent = time.Now()
+		var cmds []tea.Cmd
 		if metrics := v.Ev.GetMetrics(); metrics != nil {
-			m.walker.SetPercent(scaledPct(metrics.GetBlobsScanned()))
-			m.publish.SetPercent(scaledPct(metrics.GetChunksPublished()))
+			cmds = append(cmds,
+				m.walker.SetPercent(scaledPct(metrics.GetBlobsScanned())),
+				m.publish.SetPercent(scaledPct(metrics.GetChunksPublished())),
+			)
 		}
 		m.events = appendCap(m.events, v.Ev, 10)
-		if isTerminal(v.Ev.State) {
+		if IsTerminal(v.Ev.State) {
 			m.done = true
 			if v.Ev.State == v1.ScanState_FAILED || v.Ev.State == v1.ScanState_CANCELLED {
 				m.exitCode = 3
 			}
-			m.walker.SetPercent(1.0)
-			m.publish.SetPercent(1.0)
-			return m, tea.Quit
+			cmds = append(cmds, m.walker.SetPercent(1.0), m.publish.SetPercent(1.0), tea.Quit)
+			return m, tea.Batch(cmds...)
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 	case SubscribeErrMsg:
 		m.message = "error: " + v.Err.Error()
 		m.exitCode = 2
@@ -129,7 +131,9 @@ func (m WatchModel) View() string {
 // ExitCode returns the suggested process exit code after the program quits.
 func (m WatchModel) ExitCode() int { return m.exitCode }
 
-func isTerminal(s v1.ScanState) bool {
+// IsTerminal reports whether the scan state cannot transition further.
+// Exported so cmd packages can avoid re-defining the same switch.
+func IsTerminal(s v1.ScanState) bool {
 	switch s {
 	case v1.ScanState_COMPLETED, v1.ScanState_FAILED,
 		v1.ScanState_CANCELLED, v1.ScanState_PARTIAL:
@@ -147,18 +151,19 @@ func appendCap[T any](xs []T, x T, cap int) []T {
 }
 
 // scaledPct turns a raw count into a 0..0.95 progress percentage on a
-// flat curve so the bar advances visibly during early events but never
-// claims 100% before terminal state (Update force-sets 1.0 on terminal).
+// monotonic asymptotic curve so the bar advances visibly during early
+// events but never claims 100% before terminal state (Update force-sets
+// 1.0 on terminal). One closed form, no branch, no discontinuity.
 func scaledPct(n int64) float64 {
 	if n <= 0 {
 		return 0
 	}
-	const cap = 0.95
-	x := float64(n) / 100.0
-	if x < 1 {
-		return cap * x / (1 + x)
-	}
-	return cap * (1 - 1/(1+x/10))
+	const (
+		cap = 0.95
+		k   = 20.0
+	)
+	x := float64(n)
+	return cap * x / (x + k)
 }
 
 func maxInt(a, b int) int {
