@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 
 	"github.com/Harporis/harporis/services/cli/internal/config"
@@ -37,6 +39,7 @@ func NewRootCmd() *cobra.Command {
 
 	// Load config before any subcommand runs; explicit flags win.
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		applyColorPreference(cmd)
 		cfgPath, _ := cmd.Flags().GetString("config")
 		if cfgPath == "" {
 			cfgPath = config.DefaultPath()
@@ -50,6 +53,9 @@ func NewRootCmd() *cobra.Command {
 		}
 		if !root.PersistentFlags().Changed("nats") {
 			_ = root.PersistentFlags().Set("nats", cfg.NATSURL)
+		}
+		if !root.PersistentFlags().Changed("no-color") && cfg.Color == "never" {
+			lipgloss.SetColorProfile(termenv.Ascii)
 		}
 		return nil
 	}
@@ -89,4 +95,15 @@ func defaultNATSURL() string {
 		return v
 	}
 	return "nats://localhost:4222"
+}
+
+// applyColorPreference honours --no-color (and the NO_COLOR env var,
+// which termenv already respects automatically) by pinning the lipgloss
+// color profile to Ascii. Without this, --no-color was advertised in
+// --help but had no effect.
+func applyColorPreference(cmd *cobra.Command) {
+	noColor, _ := cmd.Flags().GetBool("no-color")
+	if noColor || os.Getenv("NO_COLOR") != "" {
+		lipgloss.SetColorProfile(termenv.Ascii)
+	}
 }
