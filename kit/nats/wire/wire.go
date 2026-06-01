@@ -3,6 +3,7 @@ package wire
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
@@ -21,6 +22,12 @@ const (
 	ValidatorPoolQueueGroup = "validator-pool"
 	WriterPoolQueueGroup    = "writer-pool"
 )
+
+// ScannerDurableConsumer is the durable consumer name shared by all
+// scanner replicas. JetStream's WorkQueuePolicy on HARPORIS_CHUNKS plus
+// a shared durable name gives us round-robin distribution across replicas
+// without explicit queue-group plumbing.
+const ScannerDurableConsumer = "scanner-pool"
 
 // Wildcard subjects for cross-scan subscribers (history, audit, etc.).
 const (
@@ -83,22 +90,62 @@ func EnsureStreams(js nats.JetStreamContext) error {
 		{Name: RequestsStream, Subjects: []string{ScansRequestsSubject}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
 		{Name: ChunksStream, Subjects: []string{"harporis.chunks.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
 		{Name: StatusStream, Subjects: []string{"harporis.status.>"}, Storage: nats.FileStorage, Retention: nats.LimitsPolicy},
-		{Name: FindingsStream, Subjects: []string{"harporis.findings.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
+		{Name: FindingsStream, Subjects: []string{"harporis.findings.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, Duplicates: 5 * time.Minute},
 	}
 	for _, c := range configs {
-		_, err := js.AddStream(c)
-		if err == nil {
+		if _, err := js.AddStream(c); err == nil {
 			continue
+		} else if !errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
+			// Some servers return the error as a JS API error rather than the
+			// typed sentinel. Fall back to checking existence — if the stream
+			// does not exist at all, surface the original AddStream error.
+			if _, ierr := js.StreamInfo(c.Name); ierr != nil {
+				return fmt.Errorf("ensure stream %s: %w", c.Name, err)
+			}
 		}
-		if errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
-			continue
+		// Stream already exists. Check whether config drifted and update if so.
+		info, err := js.StreamInfo(c.Name)
+		if err != nil {
+			return fmt.Errorf("stream info %s: %w", c.Name, err)
 		}
-		// Some servers return the error as a JS API error (string) rather than
-		// the typed sentinel; fall back to checking existence.
-		if info, ierr := js.StreamInfo(c.Name); ierr == nil && info != nil {
-			continue
+		if streamConfigDrifted(info.Config, *c) {
+			if _, err := js.UpdateStream(c); err != nil {
+				return fmt.Errorf("update stream %s: %w", c.Name, err)
+			}
 		}
-		return fmt.Errorf("ensure stream %s: %w", c.Name, err)
 	}
 	return nil
+}
+
+// streamConfigDrifted returns true if any field this package manages in
+// EnsureStreams differs between have and want. We intentionally do NOT
+// compare fields outside our control (e.g. storage backend changes an
+// operator may have made deliberately) — only what wire.go declares.
+func streamConfigDrifted(have, want nats.StreamConfig) bool {
+	if have.Retention != want.Retention {
+		return true
+	}
+	if have.Duplicates != want.Duplicates {
+		return true
+	}
+	if !subjectsEqual(have.Subjects, want.Subjects) {
+		return true
+	}
+	return false
+}
+
+func subjectsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(a))
+	for _, s := range a {
+		seen[s] = struct{}{}
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; !ok {
+			return false
+		}
+	}
+	return true
 }
