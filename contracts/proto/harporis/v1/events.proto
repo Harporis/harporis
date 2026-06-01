@@ -23,6 +23,7 @@ message ScanMetrics {
   int64 bytes_published    = 4;
   int64 errors_total       = 5;
   int64 duration_ms        = 6;
+  int64 secrets_found      = 7;
 }
 
 message StatusEvent {
