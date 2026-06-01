@@ -3,6 +3,8 @@ package rules
 import (
 	"math"
 	"testing"
+
+	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
 
 func TestShannonEntropy(t *testing.T) {
@@ -32,20 +34,24 @@ func TestShannonEntropy(t *testing.T) {
 func TestSeverityFromString(t *testing.T) {
 	tests := map[string]struct {
 		in      string
+		want    v1.Severity
 		wantErr bool
 	}{
-		"low":      {"low", false},
-		"medium":   {"medium", false},
-		"high":     {"high", false},
-		"critical": {"critical", false},
-		"unknown":  {"FATAL", true},
-		"empty":    {"", true},
+		"low":      {"low", v1.Severity_LOW, false},
+		"medium":   {"medium", v1.Severity_MEDIUM, false},
+		"high":     {"high", v1.Severity_HIGH, false},
+		"critical": {"critical", v1.Severity_CRITICAL, false},
+		"unknown":  {"FATAL", v1.Severity_SEVERITY_UNSPECIFIED, true},
+		"empty":    {"", v1.Severity_SEVERITY_UNSPECIFIED, true},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := SeverityFromString(tt.in)
+			got, err := SeverityFromString(tt.in)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SeverityFromString(%q) err=%v, wantErr=%v", tt.in, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("SeverityFromString(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}

@@ -7,7 +7,10 @@ replace (
 	github.com/Harporis/harporis/kit => ../../kit
 )
 
-require github.com/Harporis/harporis/contracts v0.0.0-00010101000000-000000000000
+require (
+	github.com/Harporis/harporis/contracts v0.0.0-00010101000000-000000000000
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	golang.org/x/net v0.55.0 // indirect

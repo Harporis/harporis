@@ -1,3 +1,6 @@
+// Package rules compiles YAML detection rules and provides supporting
+// primitives (entropy filter, severity mapping). The detector consumes
+// the compiled []Rule output of LoadEmbedded/LoadFile.
 package rules
 
 import (
@@ -16,6 +19,11 @@ type Rule struct {
 	EntropyMin  float64 // 0 = no entropy filter
 	EntropyGrp  int     // capture-group index for entropy check; 0 = full match
 	Tags        []string
+
+	// Examples are populated by the loader and consumed only by Validate.
+	// Kept unexported to avoid polluting the public API.
+	posExamples []string
+	negExamples []string
 }
 
 // SeverityFromString maps the YAML severity literal to the proto enum.
