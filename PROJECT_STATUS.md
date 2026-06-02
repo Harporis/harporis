@@ -23,7 +23,7 @@ The CLI is shipped and operational. The next module to build is `services/scanne
 | `contracts/*`    | done (proto v1)     | `contracts/proto/harporis/v1/*.proto`              |
 | `services/getter`| done (MVP)          | `services/getter/`                                 |
 | `services/cli`   | done (`cli/v0.1.0`) | `services/cli/`                                    |
-| `services/scanner`| empty stub         | `services/scanner/` (only go.mod + stub main.go)   |
+| `services/scanner`| done (v0.1.0)      | `services/scanner/` (only go.mod + stub main.go)   |
 
 ## What ships today (CLI)
 
@@ -85,32 +85,27 @@ These are flagged with reasoning so the next session can pick them up without re
 3. **Tag `cli/v0.1.0` is on origin.** Next CLI release would be `cli/v0.2.0` (or `v0.1.1` for a patch). `services/cli/Makefile` matches `cli/v*` for `git describe`.
 4. **CLI binary lives at `services/cli/bin/harporis` (build) and `/usr/local/bin/harporis` (installed).** Tests assume the binary can be `go build`'d at integration time.
 
-## Next module: `services/scanner`
+## Next module: `services/writer`
 
-The natural next module. Inputs/outputs are already defined by `kit/nats/wire`:
+`HARPORIS_FINDINGS` is now populated by the scanner. The writer is the
+next missing piece: consumer of findings → sink (file / SARIF / JSON / DB / UI).
 
-- **Consumes:** `harporis.chunks.<scan_id>` from JetStream stream `HARPORIS_CHUNKS`, queue group `validator-pool` (constant already in wire).
-- **Produces:** `harporis.findings.<scan_id>` to stream `HARPORIS_FINDINGS` (stream + wildcard subject already defined in wire).
-- **Status:** publishes `StatusEvent` updates with `SecretsFound` metric (field exists in `ScanMetrics` proto).
+The wire constant `WriterPoolQueueGroup = "writer-pool"` is already
+reserved in `kit/nats/wire/wire.go`. Architecture mirrors the scanner:
+durable pull consumer on `HARPORIS_FINDINGS` (also WorkQueuePolicy), N
+replicas share `writer-pool`, output destinations selected by the
+operator (start with: file-JSON, file-SARIF; later: SQLite, Postgres,
+Grafana data source).
 
-`contracts/proto/harporis/v1/types.proto` already has `Finding` / `FindingKind` shapes (worth re-reading before designing).
+Also pending (cross-cutting, not blocking writer):
 
-### Suggested scoping (rough, brainstorming-skill should refine)
-
-- **Detection engine** — regex + entropy + (optional) ML? Pick the smallest thing that beats trivial pattern-matching. Probably start with curated regex rule pack (leaky-repo is a good ground truth).
-- **State** — scanner needs to know which `scan_id` a chunk belongs to (carried in the message) and emit findings keyed by scan + file path + line range.
-- **Idempotency** — same chunk arriving twice (e.g., redelivery) shouldn't produce duplicate findings. JetStream's MsgId support already exists in wire; the scanner should set MsgIds based on `chunk_id + rule_id + line`.
-- **Wire-up in CLI** — `harporis history show <id>` could grow a `--findings` flag to also pull from `HARPORIS_FINDINGS`. Not needed for v1 of the scanner.
-
-### Suggested workflow for the next session
-
-```
-/gsd-brainstorm scanner          # ideation → design contract
-/gsd-plan-phase                  # TDD plan with file paths and code
-/gsd-execute-phase               # subagent-driven implementation
-```
-
-(Or start fresh with the `superpowers:brainstorming` skill.)
+1. **`harporis history show <id> --findings`** — CLI subcommand to pull
+   findings from `HARPORIS_FINDINGS` for a given scan_id. Small patch.
+2. **`harporis doctor`** — add a scanner-replica health check (any
+   replica responds via compose-internal DNS).
+3. **Cross-replica `secrets_found` aggregation in StatusEvent.** Scanner
+   currently emits per-replica counters; writer can aggregate by
+   consuming the full findings stream.
 
 ## File map (where things live)
 
