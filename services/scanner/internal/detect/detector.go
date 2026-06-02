@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/services/scanner/internal/metrics"
 	"github.com/Harporis/harporis/services/scanner/internal/rules"
 )
 
@@ -61,6 +62,7 @@ func (d *Detector) ScanChunk(c *v1.GitRowChunk) []*v1.Finding {
 				}
 				entropy = rules.ShannonEntropy(joined[targetStart:targetEnd])
 				if entropy < rule.EntropyMin {
+					metrics.EntropyFilterDropped.WithLabelValues(rule.ID).Inc()
 					continue
 				}
 			} else {
@@ -98,6 +100,7 @@ func (d *Detector) ScanChunk(c *v1.GitRowChunk) []*v1.Finding {
 			case v1.ChunkKind_BLOB:
 				f.Refs = c.Refs
 			}
+			metrics.RuleMatches.WithLabelValues(rule.ID, f.Severity.String()).Inc()
 			findings = append(findings, f)
 		}
 	}

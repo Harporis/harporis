@@ -11,6 +11,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	"github.com/Harporis/harporis/services/scanner/internal/metrics"
 )
 
 // ChunkHandler is invoked once per delivered GitRowChunk. Returning an
@@ -92,8 +93,28 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 	var chunk v1.GitRowChunk
 	if err := proto.Unmarshal(msg.Data, &chunk); err != nil {
 		slog.Error("unmarshal GitRowChunk", "err", err)
+		metrics.ChunksDropped.WithLabelValues("unmarshal_error").Inc()
 		_ = msg.Ack() // drop poison message; not recoverable
 		return
+	}
+	metrics.ChunksConsumed.Inc()
+
+	// Terminal-failure drop: if JetStream has already delivered this message
+	// MaxDeliver times, the next Nak would either redeliver again or trigger
+	// server-side drop depending on policy. Ack here so the stream unblocks,
+	// and surface the event in metrics + ERROR log (spec §4.5 / §6.1).
+	if c.opts.MaxDeliver > 0 {
+		if md, mdErr := msg.Metadata(); mdErr == nil && md.NumDelivered >= uint64(c.opts.MaxDeliver) {
+			slog.Error("chunk dropped after max deliveries",
+				"scan_id", chunk.ScanId,
+				"chunk_id", chunk.ChunkId,
+				"delivered", md.NumDelivered,
+				"max_deliver", c.opts.MaxDeliver,
+			)
+			metrics.ChunksDropped.WithLabelValues("max_deliver_exceeded").Inc()
+			_ = msg.Ack()
+			return
+		}
 	}
 
 	hctx, cancel := context.WithCancel(ctx)
@@ -116,7 +137,9 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 		}
 	}()
 
+	start := time.Now()
 	err := h(hctx, &chunk)
+	metrics.ChunkProcessingSeconds.WithLabelValues(chunk.Kind.String()).Observe(time.Since(start).Seconds())
 	close(stop)
 	<-hbDone
 

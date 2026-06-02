@@ -9,6 +9,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/services/scanner/internal/detect"
+	"github.com/Harporis/harporis/services/scanner/internal/metrics"
 )
 
 // Publisher is the subset of nats.Publisher used here.
@@ -42,6 +43,7 @@ func (h *Handler) Handle(ctx context.Context, c *v1.GitRowChunk) error {
 		if err := h.pub.PublishFinding(ctx, f); err != nil {
 			return fmt.Errorf("publish finding %s: %w", f.FindingId, err)
 		}
+		metrics.FindingsPublished.WithLabelValues(f.Severity.String()).Inc()
 	}
 	if n := int64(len(findings)); n > 0 {
 		h.tr.Incr(c.ScanId, n)

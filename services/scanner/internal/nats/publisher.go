@@ -10,6 +10,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	"github.com/Harporis/harporis/services/scanner/internal/metrics"
 )
 
 // Publisher emits Findings (deduped via JetStream MsgId) and minimal
@@ -41,6 +42,7 @@ func (p *Publisher) PublishFinding(ctx context.Context, f *v1.Finding) error {
 		Header:  natsclient.Header{natsclient.MsgIdHdr: []string{msgID}},
 	}, natsclient.Context(pubCtx))
 	if err != nil {
+		metrics.NATSPublishErrors.WithLabelValues("harporis.findings").Inc()
 		return fmt.Errorf("publish finding: %w", err)
 	}
 	return nil
@@ -61,6 +63,7 @@ func (p *Publisher) PublishStatusSecretsFound(ctx context.Context, scanID string
 	pubCtx, cancel := context.WithTimeout(ctx, p.publishWait)
 	defer cancel()
 	if _, err := p.js.Publish(wire.StatusSubject(scanID), body, natsclient.Context(pubCtx)); err != nil {
+		metrics.NATSPublishErrors.WithLabelValues("harporis.status").Inc()
 		return fmt.Errorf("publish status: %w", err)
 	}
 	return nil

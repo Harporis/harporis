@@ -11,6 +11,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/Harporis/harporis/services/scanner/internal/metrics"
 )
 
 // Emitter is what Tracker uses to publish status updates. The concrete
@@ -43,7 +45,14 @@ func NewTracker(e Emitter, tick time.Duration) *Tracker {
 func (t *Tracker) Incr(scanID string, delta int64) {
 	t.mu.Lock()
 	t.counts[scanID] += delta
+	t.updateGaugeLocked()
 	t.mu.Unlock()
+}
+
+// updateGaugeLocked publishes the current active-scan count to the metric
+// gauge. Must be called with t.mu held.
+func (t *Tracker) updateGaugeLocked() {
+	metrics.ActiveScans.Set(float64(len(t.counts)))
 }
 
 // Run drives the tick loop until ctx is cancelled. Each tick: for each
@@ -74,8 +83,10 @@ func (t *Tracker) emitDeltas(ctx context.Context) {
 
 	for scanID, count := range pending {
 		if err := t.emitter.PublishStatusSecretsFound(ctx, scanID, count); err == nil {
+			metrics.StatusUpdatesPublished.Inc()
 			t.mu.Lock()
 			t.lastEmitted[scanID] = count
+			t.updateGaugeLocked()
 			t.mu.Unlock()
 		}
 	}
@@ -92,9 +103,11 @@ func (t *Tracker) FinalEmit(ctx context.Context, scanID string) error {
 	if err := t.emitter.PublishStatusSecretsFound(ctx, scanID, count); err != nil {
 		return err
 	}
+	metrics.StatusUpdatesPublished.Inc()
 	t.mu.Lock()
 	delete(t.counts, scanID)
 	delete(t.lastEmitted, scanID)
+	t.updateGaugeLocked()
 	t.mu.Unlock()
 	return nil
 }
