@@ -60,6 +60,23 @@ services:
       # paths here; they vary per developer.
     restart: unless-stopped
 
+  scanner:
+    build:
+      context: .
+      dockerfile: services/scanner/Dockerfile
+    image: harporis/scanner:dev
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      LOG_LEVEL: info
+    expose:
+      - "9101"
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+
 volumes:
   nats-data:
   getter-work:
