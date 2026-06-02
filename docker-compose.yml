@@ -1,8 +1,14 @@
-# Local dev stack: NATS (JetStream) + Harporis getter, both in containers.
-# The CLI runs on the host and talks to NATS at localhost:4222.
+# Local dev stack: NATS (JetStream) + Harporis getter + Harporis scanner.
+# All three are containerized. The CLI runs on the host and talks to NATS
+# at localhost:4222.
 #
-# Bring up:    docker compose up --build -d
-# Tear down:   docker compose down -v
+# One-command bring up:
+#     make stack-up              # or: docker compose up --build -d --wait
+# Tear down:
+#     make stack-down            # or: docker compose down -v
+#
+# Horizontal scaling (any service supports --scale N):
+#     docker compose up -d --scale scanner=4 --scale getter=2
 #
 # Scan a host repo with the CLI:
 #   1) Add a volume by creating docker-compose.override.yml (gitignored):
@@ -54,6 +60,16 @@ services:
       - "50051"
     tmpfs:
       - /var/lib/harporis/scans
+    healthcheck:
+      # TCP probe via busybox nc (in the alpine runtime image). Confirms
+      # the /metrics + gRPC ports are listening; doesn't assert payload
+      # content but is enough to gate `docker compose up --wait` and to
+      # surface a hung process.
+      test: ["CMD", "nc", "-z", "localhost", "9100"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
     deploy:
       replicas: 1
     restart: unless-stopped
@@ -71,6 +87,15 @@ services:
       LOG_LEVEL: info
     expose:
       - "9101"
+    healthcheck:
+      # Same TCP probe pattern as getter. 9101 only opens AFTER metrics
+      # ServeAsync runs near the end of main(), so this also reads as a
+      # rough readiness signal.
+      test: ["CMD", "nc", "-z", "localhost", "9101"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
     deploy:
       replicas: 1
     restart: unless-stopped
