@@ -48,14 +48,15 @@ func Init() {
 		} {
 			registry.MustRegister(c)
 		}
-		// Seed each *Vec with a zero-valued sample so the metric name appears
-		// in /metrics output before the first real observation. Without this
-		// Prometheus exposition skips empty vec collectors.
+		// Seed *Vec collectors with empty labels so the metric names appear in
+		// /metrics scrape output even before any real observation. BuildInfo is
+		// deliberately NOT seeded — main.go populates it with real
+		// (version, commit, proto_version) labels at startup; a phantom empty
+		// series would break the standard "join on() group_left(version)" pattern.
 		ChunksDropped.WithLabelValues("")
 		ChunkProcessingSeconds.WithLabelValues("")
 		EntropyFilterDropped.WithLabelValues("")
 		NATSPublishErrors.WithLabelValues("")
-		BuildInfo.WithLabelValues("", "", "")
 	})
 }
 

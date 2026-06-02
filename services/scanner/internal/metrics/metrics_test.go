@@ -13,6 +13,7 @@ func TestRegisters_All(t *testing.T) {
 	ChunksConsumed.Inc()
 	FindingsPublished.WithLabelValues("HIGH").Inc()
 	RuleMatches.WithLabelValues("aws-access-key-id", "HIGH").Inc()
+	BuildInfo.WithLabelValues("test", "deadbeef", "1").Set(1)
 
 	srv := httptest.NewServer(Handler())
 	defer srv.Close()
