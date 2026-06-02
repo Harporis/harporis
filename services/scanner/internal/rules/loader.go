@@ -17,6 +17,7 @@ type yamlRule struct {
 	Description string   `yaml:"description"`
 	Severity    string   `yaml:"severity"`
 	Regex       string   `yaml:"regex"`
+	SecretGroup int      `yaml:"secret_group"`
 	Tags        []string `yaml:"tags"`
 	Entropy     *struct {
 		Min         float64 `yaml:"min"`
@@ -63,6 +64,7 @@ func parse(b []byte, src string) ([]Rule, error) {
 			Severity:    sev,
 			Regex:       re,
 			Tags:        y.Tags,
+			SecretGrp:   y.SecretGroup,
 			posExamples: y.Examples.Positive,
 			negExamples: y.Examples.Negative,
 		}

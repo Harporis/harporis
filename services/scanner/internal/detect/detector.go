@@ -50,7 +50,16 @@ func (d *Detector) ScanChunk(c *v1.GitRowChunk) []*v1.Finding {
 		for _, m := range matches {
 			// m[0]:m[1] is full match; m[2*i]:m[2*i+1] is capture group i (if >0).
 			start, end := m[0], m[1]
-			matched := joined[start:end]
+
+			// Determine the slice used for MatchedSecret. By default it's the
+			// full match; when SecretGrp is set, narrow to that capture group
+			// so boundary characters and prefix context (e.g. "password=") do
+			// not leak into the emitted secret. Mirrors EntropyGrp.
+			secretStart, secretEnd := start, end
+			if sg := rule.SecretGrp; sg > 0 && 2*sg+1 < len(m) && m[2*sg] >= 0 {
+				secretStart, secretEnd = m[2*sg], m[2*sg+1]
+			}
+			matchedSecret := joined[secretStart:secretEnd]
 
 			// Entropy filter (if rule has one).
 			var entropy float64
@@ -87,7 +96,7 @@ func (d *Detector) ScanChunk(c *v1.GitRowChunk) []*v1.Finding {
 				LineNumber:      lineNumber,
 				LineNumberEnd:   lineNumberEnd,
 				ByteOffset:      int64(start - idx.starts[startLine]),
-				MatchedSecret:   append([]byte(nil), matched...),
+				MatchedSecret:   append([]byte(nil), matchedSecret...),
 				MatchedLine:     append([]byte(nil), matchedLine...),
 				EntropyScore:    entropy,
 				DetectedAtMs:    d.now().UnixMilli(),

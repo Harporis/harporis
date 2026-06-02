@@ -1,7 +1,8 @@
 - id: aws-access-key-id
   description: AWS Access Key ID (AKIA / ASIA)
   severity: high
-  regex: '(?:^|[^A-Z0-9])(AKIA|ASIA)[A-Z0-9]{16}(?:[^A-Z0-9]|$)'
+  regex: '(?:^|[^A-Z0-9])((?:AKIA|ASIA)[A-Z0-9]{16})(?:[^A-Z0-9]|$)'
+  secret_group: 1
   tags: [aws, cloud]
   examples:
     positive: ["AKIAIOSFODNN7EXAMPLE", "aws_access_key=AKIA1234567890ABCDEF"]
@@ -11,6 +12,7 @@
   description: AWS Secret Access Key (40-char base64-ish with entropy filter)
   severity: critical
   regex: '(?i)(aws[_-]?secret[_-]?(?:access[_-]?)?key)\s*[:=]\s*[''"]?([A-Za-z0-9/+=]{40})[''"]?'
+  secret_group: 2
   entropy:
     min: 4.5
     target_group: 2
@@ -122,6 +124,7 @@
   description: 'Generic high-entropy assignment: token/secret/api_key/password = <20+ char string> (entropy filter applied at detect-time, not validate-time)'
   severity: low
   regex: '(?i)(token|secret|api[_-]?key|password|passwd|pwd)\s*[:=]\s*[''"]?([A-Za-z0-9+/=_-]{20,})[''"]?'
+  secret_group: 2
   entropy:
     min: 4.0
     target_group: 2

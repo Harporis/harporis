@@ -150,6 +150,45 @@ func TestScanChunk_BLOBVsDIFFWINDOWLocationFields(t *testing.T) {
 	}
 }
 
+func TestScanChunk_MatchedSecretUsesCaptureGroup(t *testing.T) {
+	// Rule mirrors the production aws-access-key-id pattern (boundary class
+	// + secret capture group). SecretGrp=1 says "emit only group 1, not the
+	// boundary + content".
+	r := rules.Rule{
+		ID:        "aws-access-key-id",
+		Severity:  v1.Severity_HIGH,
+		Regex:     regexp.MustCompile(`(?:^|[^A-Z0-9])((?:AKIA|ASIA)[A-Z0-9]{16})(?:[^A-Z0-9]|$)`),
+		SecretGrp: 1,
+	}
+	d := NewDetector([]rules.Rule{r}, "scanner/test")
+	c := chunkWithLines("aws_key=AKIAIOSFODNN7EXAMPLE")
+	got := d.ScanChunk(c)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1", len(got))
+	}
+	if want := "AKIAIOSFODNN7EXAMPLE"; string(got[0].MatchedSecret) != want {
+		t.Errorf("MatchedSecret = %q, want %q", got[0].MatchedSecret, want)
+	}
+}
+
+func TestScanChunk_MatchedSecretDefaultsToFullMatch(t *testing.T) {
+	// No SecretGrp → MatchedSecret is the full regex match (backward compat).
+	r := rules.Rule{
+		ID:       "test",
+		Severity: v1.Severity_HIGH,
+		Regex:    regexp.MustCompile(`AKIA[A-Z0-9]{16}`),
+	}
+	d := NewDetector([]rules.Rule{r}, "scanner/test")
+	c := chunkWithLines("AKIAIOSFODNN7EXAMPLE")
+	got := d.ScanChunk(c)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1", len(got))
+	}
+	if want := "AKIAIOSFODNN7EXAMPLE"; string(got[0].MatchedSecret) != want {
+		t.Errorf("MatchedSecret = %q, want %q", got[0].MatchedSecret, want)
+	}
+}
+
 func TestScanChunk_NoMatchesReturnsEmpty(t *testing.T) {
 	d := NewDetector([]rules.Rule{ruleAKIA()}, "scanner/test")
 	c := chunkWithLines("nothing", "interesting", "here")

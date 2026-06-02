@@ -18,6 +18,7 @@ type Rule struct {
 	Regex       *regexp.Regexp
 	EntropyMin  float64 // 0 = no entropy filter
 	EntropyGrp  int     // capture-group index for entropy check; 0 = full match
+	SecretGrp   int     // capture-group index for matched_secret; 0 = full match (default)
 	Tags        []string
 
 	// Examples are populated by the loader and consumed only by Validate.
