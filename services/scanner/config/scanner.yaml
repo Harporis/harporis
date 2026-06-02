@@ -1,0 +1,12 @@
+nats_url: ${NATS_URL:-nats://nats:4222}
+workers: 0                       # 0 = runtime.NumCPU()
+fetch_batch: 16
+fetch_max_wait_ms: 5000
+ack_wait_seconds: 30
+max_deliver: 5
+max_ack_pending: 64
+status_tick_ms: 5000
+publish_ack_wait_seconds: 5
+metrics_addr: :9101
+log_level: ${LOG_LEVEL:-info}
+rules_path: ""                   # empty = embedded default.yaml
