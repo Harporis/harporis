@@ -1,6 +1,153 @@
 package main
-import "fmt"
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/kit/nats/wire"
+	"github.com/Harporis/harporis/services/scanner/internal/config"
+	"github.com/Harporis/harporis/services/scanner/internal/detect"
+	"github.com/Harporis/harporis/services/scanner/internal/health"
+	"github.com/Harporis/harporis/services/scanner/internal/metrics"
+	scannernats "github.com/Harporis/harporis/services/scanner/internal/nats"
+	"github.com/Harporis/harporis/services/scanner/internal/rules"
+	"github.com/Harporis/harporis/services/scanner/internal/status"
+	"github.com/Harporis/harporis/services/scanner/internal/version"
+	"github.com/Harporis/harporis/services/scanner/internal/worker"
+)
 
 func main() {
-    fmt.Println("SCANNER")
+	cfgPath := flag.String("config", "config/scanner.yaml", "path to YAML config")
+	rulesPath := flag.String("rules", "", "path to YAML rule pack (default: embedded)")
+	workersFlag := flag.Int("workers", 0, "number of worker goroutines (overrides config)")
+	flag.Parse()
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fatal("load config: %v", err)
+	}
+	if *workersFlag > 0 {
+		cfg.Workers = *workersFlag
+	}
+	if *rulesPath != "" {
+		cfg.RulesPath = *rulesPath
+	}
+	setupLogger(cfg.LogLevel)
+
+	// Rules.
+	var ruleSet []rules.Rule
+	if cfg.RulesPath != "" {
+		ruleSet, err = rules.LoadFile(cfg.RulesPath)
+	} else {
+		ruleSet, err = rules.LoadEmbedded()
+	}
+	if err != nil {
+		fatal("load rules: %v", err)
+	}
+	if err := rules.Validate(ruleSet); err != nil {
+		fatal("invalid rule pack: %v", err)
+	}
+	slog.Info("rule pack loaded", "rules", len(ruleSet), "path", cfg.RulesPath)
+
+	// Metrics + health.
+	metrics.Init()
+	metrics.BuildInfo.WithLabelValues(version.Version, version.Commit, version.ProtoVersion).Set(1)
+	h := health.New()
+
+	rootCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// NATS.
+	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATSURL, ClientName: "harporis-scanner"})
+	if err != nil {
+		fatal("nats dial: %v", err)
+	}
+	defer cl.Close()
+	h.SetNATSConnected(true)
+
+	if err := wire.EnsureStreams(cl.JS); err != nil {
+		fatal("ensure streams: %v", err)
+	}
+
+	pub := scannernats.NewPublisher(cl.JS, time.Duration(cfg.PublishAckWaitSeconds)*time.Second)
+
+	// Status tracker.
+	tracker := status.NewTracker(pub, time.Duration(cfg.StatusTickMs)*time.Millisecond)
+	go tracker.Run(rootCtx)
+
+	// Detector + handler.
+	det := detect.NewDetector(ruleSet, version.String())
+	handler := worker.NewHandler(det, pub, tracker)
+
+	// Consumer.
+	consumer, err := scannernats.NewChunksConsumer(cl.JS, scannernats.ConsumerOptions{
+		BatchSize:      cfg.FetchBatch,
+		FetchMaxWait:   time.Duration(cfg.FetchMaxWaitMs) * time.Millisecond,
+		AckWaitSeconds: cfg.AckWaitSeconds,
+		MaxDeliver:     cfg.MaxDeliver,
+		MaxAckPending:  cfg.MaxAckPending,
+	})
+	if err != nil {
+		fatal("create consumer: %v", err)
+	}
+	h.SetConsumerCreated(true)
+
+	// Worker goroutines.
+	for i := 0; i < cfg.Workers; i++ {
+		go func(id int) {
+			h.SetWorkerStarted(true)
+			err := consumer.Run(rootCtx, func(ctx context.Context, c *v1.GitRowChunk) error {
+				return handler.Handle(ctx, c)
+			})
+			if err != nil {
+				slog.Error("worker exit", "id", id, "err", err)
+			}
+		}(i)
+	}
+
+	// HTTP server.
+	srv := metrics.ServeAsync(rootCtx, cfg.MetricsAddr, h)
+
+	slog.Info("scanner ready",
+		"nats", cfg.NATSURL, "workers", cfg.Workers, "metrics", cfg.MetricsAddr,
+		"version", version.Version, "rules", len(ruleSet),
+	)
+
+	<-rootCtx.Done()
+	slog.Info("shutdown initiated")
+	shutdownCtx, sc := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sc()
+
+	_ = consumer.Drain()
+	if err := cl.NC.Drain(); err != nil {
+		slog.Warn("nats drain", "err", err)
+	}
+	_ = srv.Shutdown(shutdownCtx)
+}
+
+func setupLogger(level string) {
+	var lvl slog.Level
+	switch level {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})))
+}
+
+func fatal(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "FATAL: "+format+"\n", args...)
+	os.Exit(1)
 }
