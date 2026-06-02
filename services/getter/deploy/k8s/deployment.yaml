@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harporis-getter
+  labels:
+    app: harporis-getter
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: harporis-getter
+  template:
+    metadata:
+      labels:
+        app: harporis-getter
+    spec:
+      containers:
+        - name: getter
+          image: ghcr.io/harporis/getter:v0.2.0
+          env:
+            - name: NATS_URL
+              value: "nats://harporis-nats.harporis.svc:4222"
+            - name: WORK_DIR
+              value: "/var/lib/harporis/scans"
+            - name: LOG_LEVEL
+              value: "info"
+          ports:
+            - name: metrics
+              containerPort: 9100
+            - name: grpc
+              containerPort: 50051
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+          volumeMounts:
+            - name: scratch
+              mountPath: /var/lib/harporis/scans
+      volumes:
+        - name: scratch
+          emptyDir: {}

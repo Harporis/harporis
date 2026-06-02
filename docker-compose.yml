@@ -42,7 +42,6 @@ services:
       context: .
       dockerfile: services/getter/Dockerfile
     image: harporis/getter:dev
-    container_name: harporis-getter
     depends_on:
       nats:
         condition: service_healthy
@@ -50,14 +49,13 @@ services:
       NATS_URL: nats://nats:4222
       LOG_LEVEL: info
       WORK_DIR: /var/lib/harporis/scans
-    ports:
-      - "9100:9100"    # Prometheus /metrics
-      - "50051:50051"  # gRPC Health
-    volumes:
-      - getter-work:/var/lib/harporis/scans
-      # Host repos to scan go in docker-compose.override.yml — see the
-      # comment block at the top of this file. Do not hardcode host
-      # paths here; they vary per developer.
+    expose:
+      - "9100"
+      - "50051"
+    tmpfs:
+      - /var/lib/harporis/scans
+    deploy:
+      replicas: 1
     restart: unless-stopped
 
   scanner:
@@ -79,4 +77,3 @@ services:
 
 volumes:
   nats-data:
-  getter-work:
