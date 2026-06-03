@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -68,21 +69,39 @@ func (c *ChunksConsumer) Run(ctx context.Context, h ChunkHandler) error {
 	if heartbeat < 200*time.Millisecond {
 		heartbeat = 200 * time.Millisecond
 	}
+	var backoff time.Duration
+	const maxBackoff = 5 * time.Second
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		msgs, err := c.sub.Fetch(c.opts.BatchSize, natsclient.MaxWait(c.opts.FetchMaxWait))
 		if err != nil {
-			if err == natsclient.ErrTimeout {
+			if errors.Is(err, natsclient.ErrTimeout) {
+				backoff = 0 // reset on benign idle timeout
 				continue
 			}
 			if ctx.Err() != nil {
 				return nil
 			}
-			slog.Warn("scanner fetch", "err", err)
+			slog.Warn("scanner fetch", "err", err, "backoff_ms", backoff.Milliseconds())
+			// Exponential backoff: 100ms, 200ms, 400ms, ..., capped at 5s.
+			if backoff == 0 {
+				backoff = 100 * time.Millisecond
+			} else {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
 			continue
 		}
+		backoff = 0 // reset on successful fetch
 		for _, msg := range msgs {
 			c.handleOne(ctx, msg, h, heartbeat)
 		}
@@ -94,7 +113,10 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 	if err := proto.Unmarshal(msg.Data, &chunk); err != nil {
 		slog.Error("unmarshal GitRowChunk", "err", err)
 		metrics.ChunksDropped.WithLabelValues("unmarshal_error").Inc()
-		_ = msg.Ack() // drop poison message; not recoverable
+		if ackErr := msg.Ack(); ackErr != nil { // drop poison message; not recoverable
+			slog.Warn("ack failed for poison chunk", "err", ackErr)
+			metrics.NATSPublishErrors.WithLabelValues("ack").Inc()
+		}
 		return
 	}
 	metrics.ChunksConsumed.Inc()
@@ -112,41 +134,83 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 				"max_deliver", c.opts.MaxDeliver,
 			)
 			metrics.ChunksDropped.WithLabelValues("max_deliver_exceeded").Inc()
-			_ = msg.Ack()
+			if ackErr := msg.Ack(); ackErr != nil {
+				slog.Warn("ack failed for max-deliver-exceeded chunk",
+					"scan_id", chunk.ScanId,
+					"chunk_id", chunk.ChunkId,
+					"err", ackErr,
+				)
+				metrics.NATSPublishErrors.WithLabelValues("ack").Inc()
+			}
 			return
 		}
 	}
 
-	hctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := make(chan struct{})
-	hbDone := make(chan struct{})
-	go func() {
-		defer close(hbDone)
-		t := time.NewTicker(heartbeat)
-		defer t.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-hctx.Done():
-				return
-			case <-t.C:
-				_ = msg.InProgress()
+	// Recovery shim: a panic in the handler must not kill the worker
+	// goroutine. JetStream would otherwise redeliver to another replica
+	// and crash that one too. We log the panic with the chunk identity
+	// (NOT the payload bytes), bump a drop metric, and fall through to
+	// Nak — bounded by MaxDeliver so a deterministic panic doesn't loop
+	// forever.
+	var handlerErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("scanner handler panic",
+					"scan_id", chunk.ScanId,
+					"chunk_id", chunk.ChunkId,
+					"panic", r,
+				)
+				metrics.ChunksDropped.WithLabelValues("handler_panic").Inc()
+				handlerErr = fmt.Errorf("handler panic: %v", r)
 			}
-		}
+		}()
+
+		hctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		stop := make(chan struct{})
+		hbDone := make(chan struct{})
+		go func() {
+			defer close(hbDone)
+			t := time.NewTicker(heartbeat)
+			defer t.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-hctx.Done():
+					return
+				case <-t.C:
+					_ = msg.InProgress()
+				}
+			}
+		}()
+
+		start := time.Now()
+		handlerErr = h(hctx, &chunk)
+		metrics.ChunkProcessingSeconds.WithLabelValues(chunk.Kind.String()).Observe(time.Since(start).Seconds())
+		close(stop)
+		<-hbDone
 	}()
 
-	start := time.Now()
-	err := h(hctx, &chunk)
-	metrics.ChunkProcessingSeconds.WithLabelValues(chunk.Kind.String()).Observe(time.Since(start).Seconds())
-	close(stop)
-	<-hbDone
-
-	if err != nil {
-		slog.Error("scanner handler", "scan_id", chunk.ScanId, "chunk_id", chunk.ChunkId, "err", err)
-		_ = msg.Nak()
+	if handlerErr != nil {
+		slog.Error("scanner handler", "scan_id", chunk.ScanId, "chunk_id", chunk.ChunkId, "err", handlerErr)
+		if nakErr := msg.Nak(); nakErr != nil {
+			slog.Warn("nak failed",
+				"scan_id", chunk.ScanId,
+				"chunk_id", chunk.ChunkId,
+				"err", nakErr,
+			)
+			metrics.NATSPublishErrors.WithLabelValues("nak").Inc()
+		}
 		return
 	}
-	_ = msg.Ack()
+	if ackErr := msg.Ack(); ackErr != nil {
+		slog.Warn("ack failed",
+			"scan_id", chunk.ScanId,
+			"chunk_id", chunk.ChunkId,
+			"err", ackErr,
+		)
+		metrics.NATSPublishErrors.WithLabelValues("ack").Inc()
+	}
 }

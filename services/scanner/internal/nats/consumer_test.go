@@ -106,3 +106,71 @@ var errSimulated = simulatedErr("boom")
 type simulatedErr string
 
 func (e simulatedErr) Error() string { return string(e) }
+
+// TestConsumer_RecoversFromHandlerPanic verifies that a panic in the chunk
+// handler is contained: the consumer survives, the panicking chunk is Nak'd
+// (and eventually drops via MaxDeliver), and subsequent chunks continue to
+// be delivered.
+func TestConsumer_RecoversFromHandlerPanic(t *testing.T) {
+	s := runJSServer(t)
+	cl := dialAndEnsure(t, s)
+
+	publishChunk(t, cl, "scan-panic", &v1.GitRowChunk{
+		ScanId:  "scan-panic",
+		ChunkId: "c-panic",
+		Kind:    v1.ChunkKind_BLOB,
+		Rows:    []*v1.GitRow{{LineNumber: 1, Content: []byte("x")}},
+	})
+	publishChunk(t, cl, "scan-ok", &v1.GitRowChunk{
+		ScanId:  "scan-ok",
+		ChunkId: "c-ok",
+		Kind:    v1.ChunkKind_BLOB,
+		Rows:    []*v1.GitRow{{LineNumber: 1, Content: []byte("y")}},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	sub, err := NewChunksConsumer(cl.JS, ConsumerOptions{
+		BatchSize:      1,
+		FetchMaxWait:   200 * time.Millisecond,
+		AckWaitSeconds: 1,
+		MaxDeliver:     2,
+		MaxAckPending:  8,
+	})
+	if err != nil {
+		t.Fatalf("NewChunksConsumer: %v", err)
+	}
+	t.Cleanup(func() { _ = sub.Drain() })
+
+	var mu sync.Mutex
+	seen := map[string]int{}
+	okDone := make(chan struct{}, 1)
+
+	go sub.Run(ctx, func(_ context.Context, c *v1.GitRowChunk) error {
+		mu.Lock()
+		seen[c.ChunkId]++
+		n := seen[c.ChunkId]
+		mu.Unlock()
+		if c.ChunkId == "c-panic" {
+			panic("simulated handler panic")
+		}
+		// c-ok arrives after consumer recovers.
+		if c.ChunkId == "c-ok" && n == 1 {
+			select {
+			case okDone <- struct{}{}:
+			default:
+			}
+		}
+		return nil
+	})
+
+	select {
+	case <-okDone:
+		// good: the consumer survived the panic and delivered c-ok
+	case <-ctx.Done():
+		mu.Lock()
+		defer mu.Unlock()
+		t.Fatalf("never received c-ok; consumer did not survive panic. seen=%v", seen)
+	}
+}
