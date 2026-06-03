@@ -67,6 +67,15 @@ func (c *Compose) Logs(ctx context.Context, service string, follow bool) (string
 	return c.r.Run(ctx, args...)
 }
 
+// Exec runs `docker compose exec -T <service> <cmd...>`. The `-T` disables
+// TTY allocation so the call works under non-interactive contexts (CI,
+// piped IO, callers that capture stdout). Returns the command's combined
+// stdout/stderr.
+func (c *Compose) Exec(ctx context.Context, service string, cmd ...string) (string, error) {
+	args := append([]string{"exec", "-T", service}, cmd...)
+	return c.r.Run(ctx, args...)
+}
+
 // ExecRunner runs `docker compose …` via os/exec.
 type ExecRunner struct {
 	binary []string // e.g. {"docker","compose"} or {"docker-compose"}

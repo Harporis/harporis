@@ -73,6 +73,22 @@ func TestLogsFollowAndService(t *testing.T) {
 	}
 }
 
+func TestExecPassesServiceAndCommand(t *testing.T) {
+	r := &fakeRunner{out: "body"}
+	c := New(r)
+	out, err := c.Exec(context.Background(), "scanner", "wget", "-qO-", "http://localhost:9101/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "body" {
+		t.Fatalf("output not surfaced: %q", out)
+	}
+	want := []string{"exec", "-T", "scanner", "wget", "-qO-", "http://localhost:9101/metrics"}
+	if !equalSlice(r.calls[0], want) {
+		t.Fatalf("got %v, want %v", r.calls[0], want)
+	}
+}
+
 func equalSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
