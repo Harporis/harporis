@@ -59,7 +59,12 @@ services:
       - "9100"
       - "50051"
     tmpfs:
-      - /var/lib/harporis/scans
+      # mode=1777 = sticky-bit + world-rwx (same shape as /tmp). The
+      # default tmpfs mount is owned by root:root with mode=755 — the
+      # getter runs as uid=100 (harporis), so without this it cannot
+      # create per-scan clone dirs. Local-path scans never hit this
+      # because they don't clone; remote-url scans do.
+      - /var/lib/harporis/scans:mode=1777
     healthcheck:
       # TCP probe via busybox nc (in the alpine runtime image). Confirms
       # the /metrics + gRPC ports are listening; doesn't assert payload
