@@ -1,0 +1,59 @@
+# NetworkPolicy: restrict getter egress to NATS + outbound git/https only.
+#
+# git fetch over HTTPS / SSH means getter needs egress to arbitrary
+# external hosts on 443 + 22. If your environment requires tighter
+# control (allowlist of git mirrors), narrow the `to:` block below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harporis-getter
+  labels:
+    app: harporis-getter
+spec:
+  podSelector:
+    matchLabels:
+      app: harporis-getter
+  policyTypes:
+    - Egress
+    - Ingress
+  egress:
+    # NATS
+    - to:
+        - podSelector:
+            matchLabels:
+              app: harporis-nats
+      ports:
+        - protocol: TCP
+          port: 4222
+    # Cluster DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS for git clone (broad — tighten in production if needed)
+    - ports:
+        - protocol: TCP
+          port: 443
+    # SSH for git clone via ssh:// remotes
+    - ports:
+        - protocol: TCP
+          port: 22
+  ingress:
+    # Prometheus scrape
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9100
+    # Internal gRPC from CLI / orchestrator (if used)
+    - ports:
+        - protocol: TCP
+          port: 50051

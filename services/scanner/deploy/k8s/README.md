@@ -25,3 +25,26 @@ Sample HorizontalPodAutoscaler targeting CPU 70%:
 
 For throughput-based autoscaling, use a custom metric (`scanner_chunks_consumed_total`
 rate) via Prometheus Adapter.
+
+## NetworkPolicy
+
+`networkpolicy.yaml` restricts pod egress to NATS + cluster DNS and ingress
+to Prometheus. Apply only if your cluster has a NetworkPolicy controller
+(Calico, Cilium, etc.):
+
+    kubectl apply -f networkpolicy.yaml
+
+On clusters without one, the YAML is a no-op — defense in depth, not a
+hard guarantee.
+
+## Pod Security Standards
+
+The Deployment ships with a restricted profile:
+
+  - `runAsNonRoot: true` + `seccompProfile: RuntimeDefault`
+  - `allowPrivilegeEscalation: false`
+  - `readOnlyRootFilesystem: true`
+  - `capabilities: { drop: [ALL] }`
+
+Adjust if your supply-chain scanner / admission controller demands stricter
+or different settings.

@@ -19,9 +19,23 @@ spec:
       labels:
         app: harporis-getter
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: getter
           image: ghcr.io/harporis/getter:v0.2.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem intentionally omitted: getter shells out
+            # to `git clone` which writes temp files (pack index, FETCH_HEAD,
+            # refs, hooks) under the working tree AND $TMPDIR. Locking down
+            # the rootfs here would break clones; the scratch emptyDir already
+            # isolates the on-disk workspace.
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: NATS_URL
               value: "nats://harporis-nats.harporis.svc:4222"

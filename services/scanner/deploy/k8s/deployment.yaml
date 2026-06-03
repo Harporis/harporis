@@ -19,9 +19,19 @@ spec:
       labels:
         app: harporis-scanner
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: scanner
           image: ghcr.io/harporis/scanner:v0.1.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: NATS_URL
               value: "nats://harporis-nats.harporis.svc:4222"
