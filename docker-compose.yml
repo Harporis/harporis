@@ -51,6 +51,12 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+    # Run as the host user so the read-only $HOME bind-mount below is
+    # actually traversable (most home dirs are mode 700, so a container
+    # running as a different uid hits permission-denied on the very
+    # first stat). UID/GID default to 1000/1000 if the env vars aren't
+    # set (typical: `make stack-up` exports them; CI may need to too).
+    user: "${UID:-1000}:${GID:-1000}"
     environment:
       NATS_URL: nats://nats:4222
       LOG_LEVEL: info
@@ -65,6 +71,15 @@ services:
       # create per-scan clone dirs. Local-path scans never hit this
       # because they don't clone; remote-url scans do.
       - /var/lib/harporis/scans:mode=1777
+    volumes:
+      # Operator's $HOME is bind-mounted read-only into /host so
+      # `harporis scan --local <path-under-$HOME>` works without a
+      # docker-compose.override.yml dance. CLI translates host paths
+      # under $HOME to /host/<remainder> before submitting. Read-only
+      # is enforced both here (`:ro`) and by getter being inherently
+      # a reader. Paths outside $HOME still require an override file
+      # (or the explicit `--no-mount-host` opt-out).
+      - "${HOME}:/host:ro"
     healthcheck:
       # TCP probe via busybox nc (in the alpine runtime image). Confirms
       # the /metrics + gRPC ports are listening; doesn't assert payload

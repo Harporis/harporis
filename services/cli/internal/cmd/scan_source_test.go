@@ -48,6 +48,65 @@ func TestBuildSourceRemoteSSH(t *testing.T) {
 	}
 }
 
+func TestTranslateLocalPath_EmptyPassthrough(t *testing.T) {
+	got, err := translateLocalPath("", "/home/u", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty, got %q", got)
+	}
+}
+
+func TestTranslateLocalPath_NoMountHostPassthrough(t *testing.T) {
+	got, err := translateLocalPath("/home/u/code/repo", "/home/u", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/home/u/code/repo" {
+		t.Fatalf("expected unchanged, got %q", got)
+	}
+}
+
+func TestTranslateLocalPath_ContainerNativePassthrough(t *testing.T) {
+	for _, p := range []string{"/repos/leaky", "/host/code/x", "/var/lib/foo", "/tmp/bar"} {
+		got, err := translateLocalPath(p, "/home/u", true)
+		if err != nil {
+			t.Errorf("%s: err=%v", p, err)
+		}
+		if got != p {
+			t.Errorf("%s: translated to %q, want unchanged", p, got)
+		}
+	}
+}
+
+func TestTranslateLocalPath_HomeTranslated(t *testing.T) {
+	got, err := translateLocalPath("/home/u/code/repo", "/home/u", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/host/code/repo" {
+		t.Fatalf("expected /host/code/repo, got %q", got)
+	}
+}
+
+func TestTranslateLocalPath_OutsideHomeRejected(t *testing.T) {
+	_, err := translateLocalPath("/srv/elsewhere", "/home/u", true)
+	if err == nil {
+		t.Fatal("expected error for path outside $HOME")
+	}
+	if !strings.Contains(err.Error(), "--no-mount-host") {
+		t.Fatalf("error message should mention the opt-out flag: %v", err)
+	}
+}
+
+func TestTranslateLocalPath_EmptyHomeRejected(t *testing.T) {
+	_, err := translateLocalPath("/some/path", "", true)
+	if err == nil {
+		t.Fatal("expected error when $HOME is empty and mount-host is on")
+	}
+}
+
 func TestScanTypeFromString(t *testing.T) {
 	cases := map[string]bool{
 		"current_state": true, "full_history": true, "branch_full": true,

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,7 +19,7 @@ func newScanCmd() *cobra.Command {
 		scanID, scanType, local, remoteURL       string
 		token, sshKey, knownHosts                string
 		branch, baseBranch, commitFrom, commitTo string
-		noWait                                   bool
+		noWait, noMountHost                      bool
 		idleTimeout                              time.Duration
 	)
 	c := &cobra.Command{
@@ -32,7 +33,14 @@ func newScanCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("invalid --type %q", scanType)
 			}
-			src, err := buildSource(local, remoteURL, token, sshKey, knownHosts)
+			translated, err := translateLocalPath(local, os.Getenv("HOME"), !noMountHost)
+			if err != nil {
+				return err
+			}
+			if translated != local {
+				fmt.Fprintf(cmd.OutOrStdout(), "mounted host path: %s → %s (read-only via getter:/host)\n", local, translated)
+			}
+			src, err := buildSource(translated, remoteURL, token, sshKey, knownHosts)
 			if err != nil {
 				return err
 			}
@@ -69,7 +77,8 @@ func newScanCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&scanID, "scan-id", "", "scan id (default: generated UUID)")
 	c.Flags().StringVar(&scanType, "type", "current_state", "scan type: current_state|full_history|branch_full|commit_range|branch_diff|head_diff|staged")
-	c.Flags().StringVar(&local, "local", "", "local repo path (inside the getter container/host)")
+	c.Flags().StringVar(&local, "local", "", "local repo path; host paths under $HOME are auto-translated to /host/<rel> via the getter's read-only $HOME mount (see --no-mount-host)")
+	c.Flags().BoolVar(&noMountHost, "no-mount-host", false, "disable auto-translation of --local; pass a container-side path (e.g. /repos/myrepo via docker-compose.override.yml)")
 	c.Flags().StringVar(&remoteURL, "remote-url", "", "remote repo URL (https:// or git@host:repo.git)")
 	c.Flags().StringVar(&token, "remote-token", "", "Bearer / PAT token for HTTPS remotes")
 	c.Flags().StringVar(&sshKey, "remote-ssh-key", "", "path to SSH private key file (PEM)")
