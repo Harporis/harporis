@@ -81,5 +81,8 @@ func TestPublisher_StatusEventCarriesSecretsFound(t *testing.T) {
 	if ev.ScanId != "scan-Y" || ev.Metrics == nil || ev.Metrics.SecretsFound != 42 {
 		t.Errorf("status event wrong: %+v", &ev)
 	}
+	if ev.State != v1.ScanState_RUNNING {
+		t.Errorf("state = %v, want RUNNING", ev.State)
+	}
 	_ = msgs[0].Ack()
 }

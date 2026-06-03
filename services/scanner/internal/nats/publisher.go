@@ -53,6 +53,7 @@ func (p *Publisher) PublishFinding(ctx context.Context, f *v1.Finding) error {
 func (p *Publisher) PublishStatusSecretsFound(ctx context.Context, scanID string, count int64) error {
 	ev := &v1.StatusEvent{
 		ScanId:    scanID,
+		State:     v1.ScanState_RUNNING,
 		Timestamp: time.Now().Unix(),
 		Metrics:   &v1.ScanMetrics{SecretsFound: count},
 	}

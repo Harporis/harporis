@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -80,7 +81,12 @@ func main() {
 
 	// Status tracker.
 	tracker := status.NewTracker(pub, time.Duration(cfg.StatusTickMs)*time.Millisecond)
-	go tracker.Run(rootCtx)
+	var workerWG sync.WaitGroup
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		tracker.Run(rootCtx)
+	}()
 
 	// Detector + handler.
 	det := detect.NewDetector(ruleSet, version.String())
@@ -101,7 +107,9 @@ func main() {
 
 	// Worker goroutines.
 	for i := 0; i < cfg.Workers; i++ {
+		workerWG.Add(1)
 		go func(id int) {
+			defer workerWG.Done()
 			h.SetWorkerStarted(true)
 			err := consumer.Run(rootCtx, func(ctx context.Context, c *v1.GitRowChunk) error {
 				return handler.Handle(ctx, c)
@@ -125,7 +133,22 @@ func main() {
 	shutdownCtx, sc := context.WithTimeout(context.Background(), 30*time.Second)
 	defer sc()
 
+	// Drain stops further fetches; in-flight handlers continue.
 	_ = consumer.Drain()
+
+	// Wait for worker goroutines, bounded by shutdownCtx.
+	done := make(chan struct{})
+	go func() {
+		workerWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		slog.Info("workers drained")
+	case <-shutdownCtx.Done():
+		slog.Warn("worker drain timed out", "budget_s", 30)
+	}
+
 	if err := cl.NC.Drain(); err != nil {
 		slog.Warn("nats drain", "err", err)
 	}
