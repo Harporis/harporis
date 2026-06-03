@@ -1,38 +1,51 @@
 # Harporis — Project Status
 
 > Snapshot for handoff between development sessions.
-> Last updated: 2026-05-30.
+> Last updated: 2026-06-03.
 
 ## TL;DR
 
-The CLI is shipped and operational. The next module to build is `services/scanner` — the consumer of NATS chunks that actually detects secrets. Everything else listed below is polish, infrastructure, or follow-up work that does not block the next module.
+The full end-to-end pipeline ships: CLI submits a scan → getter clones
+& chunks → scanner detects secrets → writer materializes findings to
+NDJSON files. v0.1 of writer closes the original "next module" gap. The
+remaining items in the Priority #1/#2/#3 roadmap are: live-verify the
+remote-repo CLI flow at scale (single-fixture smoke is done), polish
+the `harporis scan --local /host/path` UX so `docker-compose.override.yml`
+is no longer required, and add a SARIF sink to the writer.
 
 ## Architecture today
 
 ```
-+-----------+        +-------------+        +------------+        +-----------+
-| harporis  | -----> |    NATS     | -----> |  getter    | -----> |  scanner  |
-|   (CLI,   | <----- | (JetStream) | <----- | (container)|        | (planned) |
-|   host)   |        +-------------+        +------------+        +-----------+
-+-----------+
+┌───────────┐      ┌─────────────┐      ┌──────────┐      ┌──────────┐      ┌──────────┐
+│ harporis  │ ───▶ │    NATS     │ ───▶ │  getter  │ ───▶ │ scanner  │ ───▶ │  writer  │
+│   (CLI,   │ ◀─── │ (JetStream) │ ◀─── │ (N reps) │      │ (N reps) │      │ (N reps) │
+│   host)   │      └─────────────┘      └──────────┘      └──────────┘      └──────────┘
+└───────────┘                                                                     │
+                                                                                  ▼
+                                                                  ┌────────────────────────────┐
+                                                                  │  /var/lib/harporis/findings│
+                                                                  │   <scan_id>.ndjson         │
+                                                                  └────────────────────────────┘
 ```
 
-| Component        | Status              | Where                                              |
-|------------------|---------------------|----------------------------------------------------|
-| `kit/nats/wire`  | done                | `kit/nats/wire/wire.go`                            |
-| `contracts/*`    | done (proto v1)     | `contracts/proto/harporis/v1/*.proto`              |
-| `services/getter`| done (MVP)          | `services/getter/`                                 |
-| `services/cli`   | done (`cli/v0.1.0`) | `services/cli/`                                    |
-| `services/scanner`| done (v0.1.0)      | `services/scanner/` (only go.mod + stub main.go)   |
+| Component         | Status                | Where                                              |
+|-------------------|-----------------------|----------------------------------------------------|
+| `kit/nats/wire`   | done (v0.3.0)         | `kit/nats/wire/wire.go`                            |
+| `contracts/*`     | done (proto v1, v0.2.0)| `contracts/proto/harporis/v1/*.proto`             |
+| `services/getter` | done (v0.2.0)         | `services/getter/`                                 |
+| `services/cli`    | done (`cli/v0.1.0`)   | `services/cli/`                                    |
+| `services/scanner`| done (v0.1.0)         | `services/scanner/`                                |
+| `services/writer` | done (v0.1.0)         | `services/writer/`                                 |
 
 ## What ships today (CLI)
 
-12 subcommands, all wired:
+14 subcommands, all wired:
 
 - `scan` / `cancel` / `watch` — scan lifecycle. `watch` has a Bubble Tea live dashboard on tty; falls back to line output on `--json` / non-tty.
 - `up` / `down` / `ps` / `logs` — docker compose wrapper. `up` has a stepwise Bubble Tea checklist with real timings.
-- `health` / `doctor` / `metrics` — diagnostics. `doctor` has a pluggable check framework (docker / compose v2 / NATS / getter).
+- `health` / `doctor` / `metrics` — diagnostics. `doctor` covers docker / compose v2 / NATS, plus getter + scanner + writer `/metrics` (probed via `docker compose exec`, which works under `--scale N`). `metrics --service getter|scanner|writer` reads each service's collectors.
 - `history list` / `history show <id>` — walks the JetStream status stream.
+- `findings list` / `findings show <scan_id>` — reads writer's NDJSON output (via `docker compose exec writer cat` by default; `--output-dir` falls back to a host path).
 - `version` / `completion` — meta.
 
 **Quality of life:**
@@ -85,27 +98,31 @@ These are flagged with reasoning so the next session can pick them up without re
 3. **Tag `cli/v0.1.0` is on origin.** Next CLI release would be `cli/v0.2.0` (or `v0.1.1` for a patch). `services/cli/Makefile` matches `cli/v*` for `git describe`.
 4. **CLI binary lives at `services/cli/bin/harporis` (build) and `/usr/local/bin/harporis` (installed).** Tests assume the binary can be `go build`'d at integration time.
 
-## Next module: `services/writer`
+## Next priorities (post-writer v0.1)
 
-`HARPORIS_FINDINGS` is now populated by the scanner. The writer is the
-next missing piece: consumer of findings → sink (file / SARIF / JSON / DB / UI).
+The pipeline is end-to-end functional. Remaining roadmap items, in
+descending priority:
 
-The wire constant `WriterPoolQueueGroup = "writer-pool"` is already
-reserved in `kit/nats/wire/wire.go`. Architecture mirrors the scanner:
-durable pull consumer on `HARPORIS_FINDINGS` (also WorkQueuePolicy), N
-replicas share `writer-pool`, output destinations selected by the
-operator (start with: file-JSON, file-SARIF; later: SQLite, Postgres,
-Grafana data source).
-
-Also pending (cross-cutting, not blocking writer):
-
-1. **`harporis history show <id> --findings`** — CLI subcommand to pull
-   findings from `HARPORIS_FINDINGS` for a given scan_id. Small patch.
-2. **`harporis doctor`** — add a scanner-replica health check (any
-   replica responds via compose-internal DNS).
-3. **Cross-replica `secrets_found` aggregation in StatusEvent.** Scanner
-   currently emits per-replica counters; writer can aggregate by
-   consuming the full findings stream.
+1. **`harporis scan --local /host/path` without `docker-compose.override.yml`.**
+   Today the user must edit override, restart getter, then submit. Two
+   viable paths: (a) CLI orchestrates a per-scan getter pod with the
+   mount injected on the fly (Docker SDK for Go); (b) gRPC to getter
+   with a `LocalPath` field that getter resolves through a configurable
+   host-mount allowlist. Either way the override-file workflow becomes
+   a fallback, not the default.
+2. **Writer v0.2: SARIF sink** and one of {SQLite, Postgres} for
+   queryable history. The Sink interface is in place; new sinks plug
+   in via `cmd/writer/main.go`.
+3. **`harporis findings show <id> --json | jq` ergonomics** — current
+   output is one JSON-line per finding, but a `--pretty` mode that
+   decodes the base64 `matched_secret` and prints a human-readable
+   table would be nice for ops.
+4. **Cross-replica `secrets_found` aggregation in StatusEvent.** Scanner
+   currently emits per-replica counters; a follow-up could have the
+   writer aggregate by consuming the full findings stream.
+5. **Remote-repo at scale.** Single-fixture HTTPS smoke is done; SSH
+   path (`--remote-ssh-key`) is wired but unexercised against a real
+   private repo.
 
 ## File map (where things live)
 
