@@ -30,6 +30,7 @@ func newDoctorCmd() *cobra.Command {
 				checks = append(checks,
 					doctor.ContainerMetricsCheck{Service: "getter", Port: 9100, Exec: co},
 					doctor.ContainerMetricsCheck{Service: "scanner", Port: 9101, Exec: co},
+					doctor.ContainerMetricsCheck{Service: "writer", Port: 9102, Exec: co},
 				)
 			}
 			results := doctor.RunAll(checks)

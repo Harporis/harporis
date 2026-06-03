@@ -100,5 +100,37 @@ services:
       replicas: 1
     restart: unless-stopped
 
+  writer:
+    build:
+      context: .
+      dockerfile: services/writer/Dockerfile
+    image: harporis/writer:dev
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      LOG_LEVEL: info
+    expose:
+      - "9102"
+    volumes:
+      # Findings are materialized to this named volume so the host (and
+      # `harporis findings show`) can inspect them without exposing a port.
+      # Bind-mount to a host path via docker-compose.override.yml if you
+      # want them on the host filesystem directly.
+      - findings-data:/var/lib/harporis/findings
+    healthcheck:
+      # Same TCP-probe pattern as the other services. 9102 opens after
+      # metrics.ServeAsync runs, so this doubles as a readiness signal.
+      test: ["CMD", "nc", "-z", "localhost", "9102"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+
 volumes:
   nats-data:
+  findings-data:

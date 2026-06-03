@@ -18,7 +18,7 @@ import (
 // servicePorts maps each in-stack service to the host:port its Prometheus
 // /metrics endpoint listens on (inside the container, since v0.1.0 ports
 // are no longer published to the host so --scale N works).
-var servicePorts = map[string]int{"getter": 9100, "scanner": 9101}
+var servicePorts = map[string]int{"getter": 9100, "scanner": 9101, "writer": 9102}
 
 func newMetricsCmd() *cobra.Command {
 	var (
@@ -41,7 +41,7 @@ func newMetricsCmd() *cobra.Command {
 				}
 				port, ok := servicePorts[service]
 				if !ok {
-					return fmt.Errorf("unknown --service %q (want one of: getter, scanner)", service)
+					return fmt.Errorf("unknown --service %q (want one of: getter, scanner, writer)", service)
 				}
 				co, err := compose.NewDefault()
 				if err != nil {
@@ -60,9 +60,9 @@ func newMetricsCmd() *cobra.Command {
 			}
 		},
 	}
-	c.Flags().StringVar(&service, "service", "getter", "stack service to probe: getter or scanner")
+	c.Flags().StringVar(&service, "service", "getter", "stack service to probe: getter, scanner, or writer")
 	c.Flags().StringVar(&url, "url", "", "explicit metrics URL (bypasses docker compose exec)")
-	c.Flags().StringVar(&filter, "filter", "^harporis_|^scanner_", "regex applied to each metric line")
+	c.Flags().StringVar(&filter, "filter", "^harporis_|^scanner_|^writer_", "regex applied to each metric line")
 	c.Flags().BoolVar(&watch, "watch", false, "refresh every 2 seconds")
 	return c
 }

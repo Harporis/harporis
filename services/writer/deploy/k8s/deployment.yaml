@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harporis-writer
+  labels:
+    app: harporis-writer
+spec:
+  # Findings volume must support ReadWriteMany if you want N>1; with the
+  # PVC.yaml shipped here (ReadWriteOnce hostPath) keep replicas at 1.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: harporis-writer
+  template:
+    metadata:
+      labels:
+        app: harporis-writer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: writer
+          image: ghcr.io/harporis/writer:v0.1.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            # writer must write to /var/lib/harporis/findings; cannot use a
+            # read-only root filesystem. The findings dir lives on the PVC.
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: NATS_URL
+              value: "nats://harporis-nats.harporis.svc:4222"
+            - name: HARPORIS_OUTPUT_DIR
+              value: "/var/lib/harporis/findings"
+            - name: LOG_LEVEL
+              value: "info"
+          ports:
+            - name: metrics
+              containerPort: 9102
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          volumeMounts:
+            - name: findings
+              mountPath: /var/lib/harporis/findings
+      volumes:
+        - name: findings
+          persistentVolumeClaim:
+            claimName: harporis-writer-findings

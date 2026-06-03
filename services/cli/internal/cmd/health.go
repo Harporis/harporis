@@ -35,7 +35,7 @@ func newHealthCmd() *cobra.Command {
 			for _, svc := range []struct {
 				name string
 				port int
-			}{{"getter", 9100}, {"scanner", 9101}} {
+			}{{"getter", 9100}, {"scanner", 9101}, {"writer", 9102}} {
 				row := svc.name + " /metrics"
 				if cerr != nil {
 					t.Row(row, ui.ErrStyle.Render("DOWN"), "docker compose unavailable: "+cerr.Error())

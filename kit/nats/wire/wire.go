@@ -41,6 +41,12 @@ const (
 // without explicit queue-group plumbing.
 const ScannerDurableConsumer = "scanner-pool"
 
+// WriterDurableConsumer is the durable consumer name shared by all writer
+// replicas — same pattern as ScannerDurableConsumer but bound to the
+// HARPORIS_FINDINGS stream. Round-robin across replicas falls out of
+// WorkQueuePolicy + shared durable name.
+const WriterDurableConsumer = "writer-pool-pull"
+
 // Wildcard subjects for cross-scan subscribers (history, audit, etc.).
 const (
 	ChunksWildcardSubject   = "harporis.chunks.>"

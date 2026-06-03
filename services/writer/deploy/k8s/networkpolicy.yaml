@@ -1,0 +1,44 @@
+# NetworkPolicy: restrict writer egress to NATS + DNS only.
+#
+# Apply only if your cluster's CNI supports NetworkPolicy (Calico, Cilium,
+# Antrea, etc.). On clusters without a NetworkPolicy controller this is a
+# no-op — defense in depth, not a hard guarantee.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harporis-writer
+  labels:
+    app: harporis-writer
+spec:
+  podSelector:
+    matchLabels:
+      app: harporis-writer
+  policyTypes:
+    - Egress
+    - Ingress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: harporis-nats
+      ports:
+        - protocol: TCP
+          port: 4222
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9102
