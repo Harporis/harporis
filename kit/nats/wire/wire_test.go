@@ -2,6 +2,8 @@ package wire_test
 
 import (
 	"context"
+	"crypto/tls"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,5 +134,42 @@ func TestEnsureStreams_UpdatesExistingStreamConfig(t *testing.T) {
 func TestScannerDurableConsumerConst(t *testing.T) {
 	if wire.ScannerDurableConsumer != "scanner-pool" {
 		t.Errorf("ScannerDurableConsumer = %q, want %q", wire.ScannerDurableConsumer, "scanner-pool")
+	}
+}
+
+func TestDial_CredsFileNotFound(t *testing.T) {
+	s := runJSServer(t)
+	_, err := wire.Dial(wire.DialConfig{
+		URL:        s.ClientURL(),
+		ClientName: "test",
+		CredsFile:  "/nonexistent/creds.txt",
+	})
+	if err == nil {
+		t.Fatal("Dial: want error for missing creds file, got nil")
+	}
+	if !strings.Contains(err.Error(), "creds") && !strings.Contains(err.Error(), "no such file") && !strings.Contains(err.Error(), "open") {
+		t.Errorf("Dial err = %v, want creds/file-related", err)
+	}
+}
+
+func TestDial_TLSConfigPropagates(t *testing.T) {
+	// A tls.Config against a non-TLS test server proves the Secure option
+	// was applied: the underlying nats.Conn either fails to reach CONNECTED
+	// or reports a TLS-related last error. We rely on connection state
+	// because nats.RetryOnFailedConnect(true) hides the initial error from
+	// the Connect call itself.
+	s := runJSServer(t)
+	cl, err := wire.Dial(wire.DialConfig{
+		URL:        s.ClientURL(),
+		ClientName: "test",
+		TLSConfig:  &tls.Config{},
+	})
+	if err != nil {
+		// Acceptable outcome: Dial surfaced the TLS mismatch synchronously.
+		return
+	}
+	defer cl.Close()
+	if cl.NC.Status() == nats.CONNECTED {
+		t.Fatalf("Dial: TLSConfig was not applied — connection reached CONNECTED against a non-TLS server (status=%v, lastErr=%v)", cl.NC.Status(), cl.NC.LastError())
 	}
 }

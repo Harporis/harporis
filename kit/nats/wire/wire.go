@@ -1,6 +1,18 @@
+// Package wire is the cross-service NATS contract for Harporis. All
+// services dial NATS through wire.Dial, allowing the operator to plug
+// in TLS, credentials, or tokens uniformly.
+//
+// Production deployments MUST set at least one of:
+//   - DialConfig.TLSConfig (or RootCAs) for transport security
+//   - DialConfig.CredsFile or Token for authentication
+//
+// The local dev stack (docker-compose.yml) leaves them zero — that is
+// the only context where an unauthenticated, plaintext NATS connection
+// is acceptable.
 package wire
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"time"
@@ -41,10 +53,18 @@ func ChunksSubject(scanID string) string   { return "harporis.chunks." + scanID 
 func StatusSubject(scanID string) string   { return "harporis.status." + scanID }
 func FindingsSubject(scanID string) string { return "harporis.findings." + scanID }
 
-// DialConfig is a service-agnostic NATS connection config.
+// DialConfig is a service-agnostic NATS connection config. All TLS/auth
+// fields are optional; zero values preserve the dev-stack default
+// (unauthenticated, no TLS) but production deployments MUST set them.
 type DialConfig struct {
 	URL        string
 	ClientName string // e.g. "harporis-getter"
+
+	// Optional TLS/auth knobs. Empty/nil = not applied.
+	TLSConfig *tls.Config // sets nats.Secure(tlsCfg) when non-nil
+	RootCAs   string      // path to PEM bundle; sets nats.RootCAs(path) when non-empty
+	CredsFile string      // path to JWT/nkey credentials; sets nats.UserCredentials(path) when non-empty
+	Token     string      // sets nats.Token(token) when non-empty
 }
 
 // Client wraps a NATS connection + JetStream context.
@@ -54,12 +74,27 @@ type Client struct {
 }
 
 // Dial connects to NATS with reconnect-forever semantics and returns a Client.
+// Optional TLS/auth fields on cfg are translated to nats.go connect options;
+// zero values mean "not applied" so existing dev-stack callers keep working.
 func Dial(cfg DialConfig) (*Client, error) {
-	nc, err := nats.Connect(cfg.URL,
+	opts := []nats.Option{
 		nats.Name(cfg.ClientName),
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
-	)
+	}
+	if cfg.TLSConfig != nil {
+		opts = append(opts, nats.Secure(cfg.TLSConfig))
+	}
+	if cfg.RootCAs != "" {
+		opts = append(opts, nats.RootCAs(cfg.RootCAs))
+	}
+	if cfg.CredsFile != "" {
+		opts = append(opts, nats.UserCredentials(cfg.CredsFile))
+	}
+	if cfg.Token != "" {
+		opts = append(opts, nats.Token(cfg.Token))
+	}
+	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}
