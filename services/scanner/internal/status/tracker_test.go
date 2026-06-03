@@ -62,7 +62,7 @@ func TestTracker_TicksEmitOnlyWhenChanged(t *testing.T) {
 
 func TestTracker_FinalEmitOnIsLast(t *testing.T) {
 	fe := &fakeEmitter{}
-	tr := NewTracker(fe, time.Hour) // ticker won't fire; we want FinalEmit only
+	tr := NewTracker(fe, 20*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go tr.Run(ctx)
@@ -75,8 +75,47 @@ func TestTracker_FinalEmitOnIsLast(t *testing.T) {
 	if len(es) != 1 || es[0].scanID != "scan-B" || es[0].count != 7 {
 		t.Errorf("final emit wrong: %+v", es)
 	}
-	// Active count must drop to 0 after FinalEmit.
+	// Immediately after FinalEmit, scan is in the grace window — still active.
+	if got := tr.ActiveScans(); got != 1 {
+		t.Errorf("ActiveScans immediately after FinalEmit = %d, want 1 (grace window)", got)
+	}
+	// After 2*tick + slack, the grace window expires and the entry is dropped.
+	time.Sleep(150 * time.Millisecond)
 	if got := tr.ActiveScans(); got != 0 {
-		t.Errorf("ActiveScans = %d, want 0", got)
+		t.Errorf("ActiveScans after grace = %d, want 0", got)
+	}
+}
+
+func TestTracker_FinalEmitGraceWindow(t *testing.T) {
+	fe := &fakeEmitter{}
+	tr := NewTracker(fe, 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tr.Run(ctx)
+
+	tr.Incr("scan-X", 3)
+	if err := tr.FinalEmit(ctx, "scan-X"); err != nil {
+		t.Fatalf("FinalEmit: %v", err)
+	}
+	if got := tr.ActiveScans(); got != 1 {
+		t.Errorf("ActiveScans after FinalEmit = %d, want 1 (grace window)", got)
+	}
+	tr.Incr("scan-X", 2)
+	time.Sleep(120 * time.Millisecond)
+
+	es := fe.snapshot()
+	var lastCount int64
+	for _, e := range es {
+		if e.scanID == "scan-X" {
+			lastCount = e.count
+		}
+	}
+	if lastCount != 5 {
+		t.Errorf("last emit count = %d, want 5 (3 from FinalEmit + 2 late Incr)", lastCount)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if got := tr.ActiveScans(); got != 0 {
+		t.Errorf("ActiveScans after grace = %d, want 0", got)
 	}
 }

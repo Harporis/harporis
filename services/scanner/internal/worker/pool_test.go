@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"sync"
 	"testing"
@@ -95,6 +96,53 @@ func TestProcessChunk_TriggersFinalEmitOnIsLast(t *testing.T) {
 	defer tr.mu.Unlock()
 	if len(tr.final) != 1 || tr.final[0] != "scan-2" {
 		t.Errorf("FinalEmit calls = %+v, want [scan-2]", tr.final)
+	}
+}
+
+type partialPublisher struct {
+	mu       sync.Mutex
+	succeed  int
+	calls    int
+	findings []*v1.Finding
+}
+
+func (p *partialPublisher) PublishFinding(_ context.Context, f *v1.Finding) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	if p.calls > p.succeed {
+		return errors.New("simulated publish failure")
+	}
+	p.findings = append(p.findings, f)
+	return nil
+}
+
+func TestHandle_IncrementsPerSuccessfulPublish(t *testing.T) {
+	r := rules.Rule{
+		ID: "test", Severity: v1.Severity_HIGH,
+		Regex: regexp.MustCompile(`AKIA[A-Z0-9]{16}`),
+	}
+	d := detect.NewDetector([]rules.Rule{r}, "scanner/test")
+	pub := &partialPublisher{succeed: 2}
+	tr := &fakeTracker{}
+	h := NewHandler(d, pub, tr)
+
+	c := &v1.GitRowChunk{
+		ScanId: "scan-fail", ChunkId: "c-1", Kind: v1.ChunkKind_BLOB,
+		Rows: []*v1.GitRow{
+			{LineNumber: 1, Content: []byte("AKIAIOSFODNN7EXAMPLE")},
+			{LineNumber: 2, Content: []byte("AKIAIOSFODNN7EXAMPLE")},
+			{LineNumber: 3, Content: []byte("AKIAIOSFODNN7EXAMPLE")},
+		},
+	}
+	err := h.Handle(context.Background(), c)
+	if err == nil {
+		t.Fatal("Handle: want error from partial publisher, got nil")
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if tr.incs["scan-fail"] != 2 {
+		t.Errorf("Incr count = %d, want 2 (counter advances per successful publish, not batch)", tr.incs["scan-fail"])
 	}
 }
 

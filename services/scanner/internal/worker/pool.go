@@ -37,16 +37,19 @@ func NewHandler(d *detect.Detector, pub Publisher, tr Tracker) *Handler {
 
 // Handle is what the consumer's ChunkHandler delegates to. Errors are
 // surfaced so the consumer Naks for redelivery.
+//
+// Counter increments fire per successful publish (not once at the end). If a
+// publish mid-batch fails and we bail out, earlier successes have already
+// bumped the counter, so JetStream MsgId dedup on redelivery can safely
+// absorb the duplicates without losing the count.
 func (h *Handler) Handle(ctx context.Context, c *v1.GitRowChunk) error {
 	findings := h.d.ScanChunk(c)
 	for _, f := range findings {
 		if err := h.pub.PublishFinding(ctx, f); err != nil {
 			return fmt.Errorf("publish finding %s: %w", f.FindingId, err)
 		}
+		h.tr.Incr(c.ScanId, 1)
 		metrics.FindingsPublished.WithLabelValues(f.Severity.String()).Inc()
-	}
-	if n := int64(len(findings)); n > 0 {
-		h.tr.Incr(c.ScanId, n)
 	}
 	if c.IsLastInScan {
 		if err := h.tr.FinalEmit(ctx, c.ScanId); err != nil {

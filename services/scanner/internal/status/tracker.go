@@ -27,17 +27,21 @@ type Tracker struct {
 	emitter Emitter
 	tick    time.Duration
 
-	mu          sync.Mutex
-	counts      map[string]int64
-	lastEmitted map[string]int64
+	mu           sync.Mutex
+	counts       map[string]int64
+	lastEmitted  map[string]int64
+	pendingFinal map[string]time.Time // scanID → grace deadline after FinalEmit
+	now          func() time.Time
 }
 
 func NewTracker(e Emitter, tick time.Duration) *Tracker {
 	return &Tracker{
-		emitter:     e,
-		tick:        tick,
-		counts:      make(map[string]int64),
-		lastEmitted: make(map[string]int64),
+		emitter:      e,
+		tick:         tick,
+		counts:       make(map[string]int64),
+		lastEmitted:  make(map[string]int64),
+		pendingFinal: make(map[string]time.Time),
+		now:          time.Now,
 	}
 }
 
@@ -79,6 +83,18 @@ func (t *Tracker) emitDeltas(ctx context.Context) {
 			pending[scanID] = count
 		}
 	}
+	// Expire pending-final scans whose grace window has passed. Drop their
+	// state so the gauge stops counting them and we don't re-emit.
+	nowT := t.now()
+	for scanID, deadline := range t.pendingFinal {
+		if nowT.After(deadline) {
+			delete(t.counts, scanID)
+			delete(t.lastEmitted, scanID)
+			delete(t.pendingFinal, scanID)
+			delete(pending, scanID)
+		}
+	}
+	t.updateGaugeLocked()
 	t.mu.Unlock()
 
 	for scanID, count := range pending {
@@ -86,15 +102,17 @@ func (t *Tracker) emitDeltas(ctx context.Context) {
 			metrics.StatusUpdatesPublished.Inc()
 			t.mu.Lock()
 			t.lastEmitted[scanID] = count
-			t.updateGaugeLocked()
 			t.mu.Unlock()
 		}
 	}
 }
 
-// FinalEmit publishes the latest counter for scanID immediately and removes
-// the scan from the active map. Called by the worker on chunk with
-// is_last_in_scan = true.
+// FinalEmit publishes the latest counter for scanID immediately and marks
+// the scan as pending-final with a grace window of 2*tick. Late Incr calls
+// from in-flight workers (the IsLastInScan chunk may overtake earlier ones
+// in flight under MaxAckPending > 1) will still be observed by the next tick
+// and re-emitted. Eviction happens in emitDeltas once the deadline passes.
+// Called by the worker on the chunk with is_last_in_scan = true.
 func (t *Tracker) FinalEmit(ctx context.Context, scanID string) error {
 	t.mu.Lock()
 	count := t.counts[scanID]
@@ -103,10 +121,10 @@ func (t *Tracker) FinalEmit(ctx context.Context, scanID string) error {
 	if err := t.emitter.PublishStatusSecretsFound(ctx, scanID, count); err != nil {
 		return err
 	}
-	metrics.StatusUpdatesPublished.Inc()
 	t.mu.Lock()
-	delete(t.counts, scanID)
-	delete(t.lastEmitted, scanID)
+	t.pendingFinal[scanID] = t.now().Add(2 * t.tick)
+	t.lastEmitted[scanID] = count
+	metrics.StatusUpdatesPublished.Inc()
 	t.updateGaugeLocked()
 	t.mu.Unlock()
 	return nil
