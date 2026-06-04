@@ -20,8 +20,13 @@ type Config struct {
 	MaxDeliver     int    `yaml:"max_deliver"`
 	MaxAckPending  int    `yaml:"max_ack_pending"`
 	OutputDir      string `yaml:"output_dir"`
-	MetricsAddr    string `yaml:"metrics_addr"`
-	LogLevel       string `yaml:"log_level"`
+	// Sink toggles. Both default to true so the operator-zero-config
+	// case writes both NDJSON (streaming-friendly) and SARIF (industry-
+	// standard for code-scanning tools).
+	NDJSONEnabled *bool  `yaml:"ndjson_enabled"`
+	SARIFEnabled  *bool  `yaml:"sarif_enabled"`
+	MetricsAddr   string `yaml:"metrics_addr"`
+	LogLevel      string `yaml:"log_level"`
 }
 
 // Load reads YAML config from path (via kit/config.LoadYAML which
@@ -60,6 +65,14 @@ func applyDefaults(c *Config) {
 	}
 	if c.OutputDir == "" {
 		c.OutputDir = "/var/lib/harporis/findings"
+	}
+	if c.NDJSONEnabled == nil {
+		v := true
+		c.NDJSONEnabled = &v
+	}
+	if c.SARIFEnabled == nil {
+		v := true
+		c.SARIFEnabled = &v
 	}
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = ":9102"

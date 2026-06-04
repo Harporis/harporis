@@ -50,10 +50,27 @@ func main() {
 	rootCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Sink.
-	out, err := sink.NewNDJSONFile(cfg.OutputDir)
-	if err != nil {
-		fatal("init sink: %v", err)
+	// Sinks. NDJSON is the streaming default; SARIF is the standard
+	// code-scanning industry format. Both write into cfg.OutputDir,
+	// keyed by scan_id with distinct extensions (.ndjson / .sarif), so
+	// the operator gets both views from one mount.
+	sinks := make([]sink.Sink, 0, 2)
+	if cfg.NDJSONEnabled != nil && *cfg.NDJSONEnabled {
+		nd, err := sink.NewNDJSONFile(cfg.OutputDir)
+		if err != nil {
+			fatal("init ndjson sink: %v", err)
+		}
+		sinks = append(sinks, nd)
+	}
+	if cfg.SARIFEnabled != nil && *cfg.SARIFEnabled {
+		sa, err := sink.NewSARIF(cfg.OutputDir)
+		if err != nil {
+			fatal("init sarif sink: %v", err)
+		}
+		sinks = append(sinks, sa)
+	}
+	if len(sinks) == 0 {
+		fatal("no sinks enabled — set ndjson_enabled or sarif_enabled to true")
 	}
 
 	// NATS.
@@ -88,14 +105,20 @@ func main() {
 			defer workerWG.Done()
 			h.SetWorkerStarted(true)
 			err := consumer.Run(rootCtx, func(ctx context.Context, f *v1.Finding) error {
-				start := time.Now()
-				err := out.Write(ctx, f)
-				metrics.FindingsWriteSeconds.WithLabelValues(out.Name()).Observe(time.Since(start).Seconds())
-				if err != nil {
-					metrics.SinkErrors.WithLabelValues(out.Name(), "write_error").Inc()
-					return err
+				// Fan-out to every enabled sink. Per-sink metrics fire
+				// independently; on any sink error we return so the
+				// message Naks and the operator gets a metric bump on
+				// the specific sink that failed.
+				for _, out := range sinks {
+					start := time.Now()
+					werr := out.Write(ctx, f)
+					metrics.FindingsWriteSeconds.WithLabelValues(out.Name()).Observe(time.Since(start).Seconds())
+					if werr != nil {
+						metrics.SinkErrors.WithLabelValues(out.Name(), "write_error").Inc()
+						return werr
+					}
+					metrics.SinkWrites.WithLabelValues(out.Name(), f.Severity.String()).Inc()
 				}
-				metrics.SinkWrites.WithLabelValues(out.Name(), f.Severity.String()).Inc()
 				return nil
 			})
 			if err != nil {
@@ -131,8 +154,10 @@ func main() {
 		slog.Warn("worker drain timed out", "budget_s", 30)
 	}
 
-	if err := out.Close(); err != nil {
-		slog.Warn("sink close", "err", err)
+	for _, out := range sinks {
+		if err := out.Close(); err != nil {
+			slog.Warn("sink close", "sink", out.Name(), "err", err)
+		}
 	}
 	if err := cl.NC.Drain(); err != nil {
 		slog.Warn("nats drain", "err", err)
