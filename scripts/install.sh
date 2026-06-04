@@ -1,24 +1,35 @@
 #!/usr/bin/env bash
-# Harporis CLI installer.
+# Harporis one-command installer for the full stack
+# (CLI + getter + scanner + writer + NATS JetStream).
 #
 # Usage:
-#   bash scripts/install.sh
-#   PREFIX=$HOME/.local bash scripts/install.sh   # default
+#   bash scripts/install.sh                      # default: $HOME/.local
+#   PREFIX=$HOME/.local bash scripts/install.sh
 #   PREFIX=/usr/local sudo -E bash scripts/install.sh
+#   bash scripts/install.sh --skip-stack         # CLI + deps only
 #
 # What it does:
 #   1. ensures Go >= 1.26 (downloads to ~/.local/go if missing)
 #   2. ensures Docker + compose v2 (offers to run get.docker.com)
 #   3. builds harporis and installs to $PREFIX/bin
 #   4. installs shell completion for your current shell
-#   5. patches rc-file (idempotently) so PATH and completion work in new shells
-#   6. runs `harporis doctor`
+#   5. patches rc-file (idempotently) so PATH + completion work in new shells
+#   6. brings up the stack: nats + getter + scanner + writer (unless --skip-stack)
+#   7. runs `harporis doctor`
 
 set -euo pipefail
 
 GO_VERSION="${GO_VERSION:-1.26.0}"
 PREFIX="${PREFIX:-$HOME/.local}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SKIP_STACK=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --skip-stack) SKIP_STACK=1;;
+    -h|--help) sed -n '1,20p' "$0"; exit 0;;
+  esac
+done
 
 # ---- logging ----------------------------------------------------------------
 
@@ -180,6 +191,37 @@ install_completion_fish() {
   ok "fish completion installed"
 }
 
+bring_up_stack() {
+  if [ "$SKIP_STACK" -eq 1 ]; then
+    warn "stack bring-up skipped (--skip-stack)"
+    return
+  fi
+  # `docker info` is a lightweight permission probe; on fresh installs
+  # the user is in the docker group but has not yet re-logged in, so the
+  # current shell still gets "permission denied" on the socket. We fall
+  # back to sg(1) to enter the group for the duration of the compose
+  # invocation — same trick the official Docker docs recommend.
+  local docker_runner="docker"
+  if ! docker info >/dev/null 2>&1; then
+    if id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
+      log "user is in docker group but new group not yet active — using sg"
+      docker_runner='sg docker -c "docker"'
+    else
+      warn "docker socket not reachable as $USER and user not in docker group; skipping stack bring-up"
+      warn "fix: sudo usermod -aG docker $USER && newgrp docker, then re-run"
+      return
+    fi
+  fi
+  log "bringing up stack (nats + getter + scanner + writer)"
+  # UID/GID exported so the getter's host-mount of \$HOME is traversable.
+  if ! ( cd "$REPO_ROOT" && UID=$(id -u) GID=$(id -g) bash -c "$docker_runner compose up -d --build --wait" ) >/tmp/harporis-stack.log 2>&1; then
+    cat /tmp/harporis-stack.log >&2
+    warn "stack bring-up failed (see output above) — run \`make stack-up\` manually after fixing"
+    return
+  fi
+  ok "stack healthy (4 containers: nats, getter, scanner, writer)"
+}
+
 doctor_check() {
   if ! command -v "$PREFIX/bin/harporis" >/dev/null 2>&1; then
     warn "harporis just installed but not on current shell PATH — open a new terminal"
@@ -192,11 +234,12 @@ doctor_check() {
 # ---- main -------------------------------------------------------------------
 
 log "harporis installer"
-log "PREFIX=$PREFIX  SHELL=$(detect_shell)  GO_VERSION=$GO_VERSION"
+log "PREFIX=$PREFIX  SHELL=$(detect_shell)  GO_VERSION=$GO_VERSION  SKIP_STACK=$SKIP_STACK"
 ensure_go
 ensure_docker
 build_and_install
 install_completion
+bring_up_stack
 doctor_check
 
 cat <<EOF
@@ -207,11 +250,15 @@ Next steps:
   ${C_DIM}# pick up updated rc / PATH:${C_RESET}
   exec \$SHELL
 
-  ${C_DIM}# start the stack and run a scan:${C_RESET}
-  cd $REPO_ROOT
-  make stack-up
-  harporis scan --local /repos/demo
+  ${C_DIM}# scan a repo on your host (auto-mounted via getter:/host):${C_RESET}
+  harporis scan --local ~/path/to/your/repo
 
-If a step above was skipped (already installed), this is normal. Re-run
-the script any time — it is idempotent.
+  ${C_DIM}# read the findings (NDJSON, one per line):${C_RESET}
+  harporis findings list
+  harporis findings show <scan_id>
+
+  ${C_DIM}# tear down the stack when done:${C_RESET}
+  cd $REPO_ROOT && make stack-down
+
+Re-run the script any time — every step is idempotent.
 EOF

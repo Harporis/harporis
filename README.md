@@ -1,56 +1,80 @@
 # Harporis
 
-Git-aware secret hunter. A small set of services that consume git
-repositories, normalize them into chunks, and (eventually) detect
-secrets and other sensitive patterns at scale.
+Git-aware secret hunter. A horizontally scalable pipeline that ingests
+git repositories, detects secrets with a regex + Shannon-entropy rule
+pack, and materializes findings to durable NDJSON sinks.
 
 ## Architecture
 
 ```
-+-----------+        +-------------+        +------------+
-| harporis  | -----> |    NATS     | -----> |   getter   |
-|   (CLI,   | <----- | (JetStream) | <----- | (container)|
-|   host)   |        +-------------+        +------------+
-+-----------+
+┌───────────┐      ┌─────────────┐      ┌──────────┐      ┌──────────┐      ┌──────────┐
+│ harporis  │ ───▶ │    NATS     │ ───▶ │  getter  │ ───▶ │ scanner  │ ───▶ │  writer  │
+│   (CLI,   │ ◀─── │ (JetStream) │ ◀─── │ (N reps) │      │ (N reps) │      │ (N reps) │
+│   host)   │      └─────────────┘      └──────────┘      └──────────┘      └──────────┘
+└───────────┘                                                                     │
+                                                                                  ▼
+                                                                  ┌────────────────────────────┐
+                                                                  │  /var/lib/harporis/findings│
+                                                                  │   <scan_id>.ndjson         │
+                                                                  └────────────────────────────┘
 ```
 
-- `getter` (container) — consumes `ScanRequest` from NATS, emits
-  chunk + status events. See `services/getter/`.
-- `nats` (container) — JetStream message broker.
-- `harporis` (host) — operator CLI. See `services/cli/`.
+- `getter` — clones the repo, normalizes to chunks, publishes on NATS.
+- `scanner` — pulls chunks, applies the rule pack, publishes findings.
+- `writer` — pulls findings, materializes one NDJSON file per scan_id.
+- `harporis` (CLI) — submits scans, watches status, reads findings.
 
-## Quick start
-
-One-liner — installs Go (if needed), Docker (with confirmation, if
-needed), builds harporis, configures shell completion, runs `doctor`:
+## Install in one command
 
 ```bash
 bash scripts/install.sh
 ```
 
-Then:
+This installs Go (if missing), Docker + compose v2 (with confirmation),
+builds the `harporis` CLI to `~/.local/bin`, wires shell completion,
+**brings up the full stack** (`nats + getter + scanner + writer`), and
+runs `harporis doctor`.
+
+Flags:
+
+- `--skip-stack` — install CLI + dependencies only, do not bring up the stack.
+- `PREFIX=/usr/local sudo -E bash scripts/install.sh` — system-wide.
+
+After it finishes:
 
 ```bash
-exec $SHELL                       # pick up updated PATH + completion
-make stack-up                     # docker compose up -d (NATS + getter)
-harporis doctor                   # 4/4 OK?
-harporis scan --local /repos/demo # run a scan with live dashboard
+exec $SHELL                              # pick up updated PATH + completion
+
+# scan any repo on your host (auto-translated via getter's read-only $HOME mount):
+harporis scan --local ~/code/my-project
+
+# read the findings:
+harporis findings list
+harporis findings show <scan_id>         # NDJSON, one finding per line
+
+# tear down:
+make stack-down
 ```
 
-Default install location is `~/.local/bin` (no sudo). For system-wide:
-`PREFIX=/usr/local sudo -E bash scripts/install.sh`.
+Re-run the installer any time — every step is idempotent.
 
-For a hands-on walkthrough see [`services/getter/QUICKSTART.md`](services/getter/QUICKSTART.md).
-For CLI install options and the full command tour see [`services/cli/README.md`](services/cli/README.md).
+## Hands-on docs
+
+- CLI tour + install options: [`services/cli/README.md`](services/cli/README.md)
+- Getter operator guide: [`services/getter/QUICKSTART.md`](services/getter/QUICKSTART.md)
+- Scanner details: [`services/scanner/README.md`](services/scanner/README.md)
+- Writer details: [`services/writer/README.md`](services/writer/README.md)
+- Project status + roadmap: [`PROJECT_STATUS.md`](PROJECT_STATUS.md)
 
 ## Repo layout
 
 | Path              | What                                                |
 |-------------------|-----------------------------------------------------|
-| `services/getter` | Git → NATS pipeline (server-side, containerized)    |
 | `services/cli`    | `harporis` operator CLI (host-side)                 |
-| `services/scanner`| (planned) secret detection consumer                 |
-| `kit/`            | Cross-service Go primitives (`kit/nats/wire`)       |
+| `services/getter` | Git → NATS pipeline (server-side, containerized)    |
+| `services/scanner`| Chunk consumer + secret detection                   |
+| `services/writer` | Findings consumer → NDJSON file-per-scan            |
+| `kit/`            | Cross-service Go primitives (`kit/nats/wire`, `kit/scan`) |
 | `contracts/`      | Proto definitions and generated Go                  |
 
 ## License
