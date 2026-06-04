@@ -12,10 +12,11 @@ import (
 	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	kithealth "github.com/Harporis/harporis/kit/health"
+	kithttpserver "github.com/Harporis/harporis/kit/metrics/httpserver"
 	"github.com/Harporis/harporis/kit/nats/wire"
 	"github.com/Harporis/harporis/services/scanner/internal/config"
 	"github.com/Harporis/harporis/services/scanner/internal/detect"
-	"github.com/Harporis/harporis/services/scanner/internal/health"
 	"github.com/Harporis/harporis/services/scanner/internal/metrics"
 	scannernats "github.com/Harporis/harporis/services/scanner/internal/nats"
 	"github.com/Harporis/harporis/services/scanner/internal/rules"
@@ -60,7 +61,7 @@ func main() {
 	// Metrics + health.
 	metrics.Init()
 	metrics.BuildInfo.WithLabelValues(version.Version, version.Commit, version.ProtoVersion).Set(1)
-	h := health.New()
+	h := kithealth.New()
 
 	rootCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -120,8 +121,8 @@ func main() {
 		}(i)
 	}
 
-	// HTTP server.
-	srv := metrics.ServeAsync(rootCtx, cfg.MetricsAddr, h)
+	// HTTP server: /metrics from scanner, /healthz + /readyz from kit/health.
+	srv := kithttpserver.ServeAsync(rootCtx, cfg.MetricsAddr, metrics.Handler(), h.HealthzHandler(), h.ReadyzHandler())
 
 	slog.Info("scanner ready",
 		"nats", cfg.NATSURL, "workers", cfg.Workers, "metrics", cfg.MetricsAddr,

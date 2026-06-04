@@ -5,12 +5,9 @@
 package config
 
 import (
-	"fmt"
-	"os"
-	"regexp"
 	"runtime"
 
-	"gopkg.in/yaml.v3"
+	kitcfg "github.com/Harporis/harporis/kit/config"
 )
 
 // Config holds runtime config for the scanner.
@@ -30,28 +27,13 @@ type Config struct {
 	RulesPath             string `yaml:"rules_path"`
 }
 
-var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
-
-func expandEnv(s string) string {
-	return envPattern.ReplaceAllStringFunc(s, func(match string) string {
-		g := envPattern.FindStringSubmatch(match)
-		if v, ok := os.LookupEnv(g[1]); ok && v != "" {
-			return v
-		}
-		return g[2]
-	})
-}
-
-// Load reads YAML config from path, performs ${VAR:-default} env substitution,
-// and applies defaults for any unset fields.
+// Load reads YAML config from path (via kit/config.LoadYAML which
+// performs ${VAR:-default} env substitution), then applies defaults
+// for any unset fields.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
-	}
 	var cfg Config
-	if err := yaml.Unmarshal([]byte(expandEnv(string(raw))), &cfg); err != nil {
-		return nil, fmt.Errorf("parse yaml: %w", err)
+	if err := kitcfg.LoadYAML(path, &cfg); err != nil {
+		return nil, err
 	}
 	applyDefaults(&cfg)
 	return &cfg, nil

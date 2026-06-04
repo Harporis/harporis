@@ -15,9 +15,10 @@ import (
 	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	kithealth "github.com/Harporis/harporis/kit/health"
+	kithttpserver "github.com/Harporis/harporis/kit/metrics/httpserver"
 	"github.com/Harporis/harporis/kit/nats/wire"
 	"github.com/Harporis/harporis/services/writer/internal/config"
-	"github.com/Harporis/harporis/services/writer/internal/health"
 	"github.com/Harporis/harporis/services/writer/internal/metrics"
 	writernats "github.com/Harporis/harporis/services/writer/internal/nats"
 	"github.com/Harporis/harporis/services/writer/internal/sink"
@@ -44,7 +45,7 @@ func main() {
 
 	metrics.Init()
 	metrics.BuildInfo.WithLabelValues(version.Version, version.Commit, version.ProtoVersion).Set(1)
-	h := health.New()
+	h := kithealth.New()
 
 	rootCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -103,8 +104,8 @@ func main() {
 		}(i)
 	}
 
-	// HTTP server (metrics + health).
-	srv := metrics.ServeAsync(cfg.MetricsAddr, h.HealthzHandler(), h.ReadyzHandler())
+	// HTTP server: /metrics from writer, /healthz + /readyz from kit/health.
+	srv := kithttpserver.ServeAsync(rootCtx, cfg.MetricsAddr, metrics.Handler(), h.HealthzHandler(), h.ReadyzHandler())
 
 	slog.Info("writer ready",
 		"nats", cfg.NATSURL, "workers", cfg.Workers, "metrics", cfg.MetricsAddr,

@@ -1,27 +1,26 @@
 // Package nats holds the writer's JetStream consumer for HARPORIS_FINDINGS.
-// Mirrors the scanner's chunks consumer in shape (durable pull + heartbeat
-// + backoff + recover) so behaviour is uniform across services.
+// The shared fetch/heartbeat/recover loop lives in kit/nats/pullconsumer;
+// this file owns the writer-specific PullSubscribe config + metric
+// mapping so behaviour stays in sync with scanner without copy/paste.
 package nats
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
-	"sync"
 	"time"
 
 	natsclient "github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/kit/nats/pullconsumer"
 	"github.com/Harporis/harporis/kit/nats/wire"
 	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
-// FindingHandler is invoked once per delivered Finding. Returning an error
-// causes the consumer to Nak for redelivery (up to MaxDeliver); returning
-// nil causes the consumer to Ack.
+// FindingHandler is invoked once per delivered Finding. Returning an
+// error causes the consumer to Nak for redelivery (up to MaxDeliver);
+// returning nil causes the consumer to Ack.
 type FindingHandler func(ctx context.Context, f *v1.Finding) error
 
 // ConsumerOptions configures the findings consumer.
@@ -34,8 +33,7 @@ type ConsumerOptions struct {
 }
 
 // FindingsConsumer subscribes to harporis.findings.> via a durable pull
-// consumer shared across writer replicas. WorkQueuePolicy on
-// HARPORIS_FINDINGS gives exactly-one-replica delivery per message.
+// consumer shared across writer replicas.
 type FindingsConsumer struct {
 	sub  *natsclient.Subscription
 	opts ConsumerOptions
@@ -47,9 +45,7 @@ type FindingsConsumer struct {
 // pending findings don't block the WorkQueuePolicy stream forever.
 const DefaultInactiveThreshold = 24 * time.Hour
 
-// NewFindingsConsumer creates the durable pull subscription. Must be called
-// once per process; concurrent replicas sharing wire.WriterDurableConsumer
-// fan out automatically.
+// NewFindingsConsumer creates the durable pull subscription.
 func NewFindingsConsumer(js natsclient.JetStreamContext, opts ConsumerOptions) (*FindingsConsumer, error) {
 	ackWait := time.Duration(opts.AckWaitSeconds) * time.Second
 	sub, err := js.PullSubscribe(
@@ -71,165 +67,46 @@ func NewFindingsConsumer(js natsclient.JetStreamContext, opts ConsumerOptions) (
 // Drain initiates a graceful shutdown of the subscription.
 func (c *FindingsConsumer) Drain() error { return c.sub.Drain() }
 
-// Run blocks until ctx is cancelled. It pulls batches and invokes h for
-// each finding. Slow handlers stay alive via msg.InProgress() heartbeats.
-// Handler errors cause Nak; success causes Ack.
+// Run blocks until ctx is cancelled, delegating the fetch/heartbeat/
+// recover loop to kit/nats/pullconsumer.
 func (c *FindingsConsumer) Run(ctx context.Context, h FindingHandler) error {
-	heartbeat := time.Duration(c.opts.AckWaitSeconds) * time.Second / 3
-	if heartbeat < 200*time.Millisecond {
-		heartbeat = 200 * time.Millisecond
-	}
-	var backoff time.Duration
-	const maxBackoff = 5 * time.Second
-	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-		msgs, err := c.sub.Fetch(c.opts.BatchSize, natsclient.MaxWait(c.opts.FetchMaxWait))
-		if err != nil {
-			if errors.Is(err, natsclient.ErrTimeout) {
-				backoff = 0
-				continue
-			}
-			if ctx.Err() != nil {
-				return nil
-			}
-			// Drain or connection-closed during graceful shutdown is
-			// expected and not error-worthy; log at Debug only.
-			if errors.Is(err, natsclient.ErrBadSubscription) ||
-				errors.Is(err, natsclient.ErrConnectionClosed) ||
-				errors.Is(err, natsclient.ErrConnectionDraining) {
-				return nil
-			}
-			slog.Warn("writer fetch", "err", err, "backoff_ms", backoff.Milliseconds())
-			if backoff == 0 {
-				backoff = 100 * time.Millisecond
-			} else {
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			}
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(backoff):
-			}
-			continue
-		}
-		backoff = 0
-		for _, msg := range msgs {
-			c.handleOne(ctx, msg, h, heartbeat)
-		}
-	}
+	return pullconsumer.Run[*v1.Finding](
+		ctx,
+		c.sub,
+		pullconsumer.Options{
+			ServiceName:    "writer",
+			BatchSize:      c.opts.BatchSize,
+			FetchMaxWait:   c.opts.FetchMaxWait,
+			AckWaitSeconds: c.opts.AckWaitSeconds,
+			MaxDeliver:     c.opts.MaxDeliver,
+		},
+		findingLifecycle{},
+		findingMetrics{},
+		func(ctx context.Context, f *v1.Finding) error { return h(ctx, f) },
+	)
 }
 
-func (c *FindingsConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h FindingHandler, heartbeat time.Duration) {
-	var finding v1.Finding
-	if err := proto.Unmarshal(msg.Data, &finding); err != nil {
-		slog.Error("unmarshal Finding", "err", err)
-		metrics.NATSDeliveryErrors.WithLabelValues("unmarshal").Inc()
-		if ackErr := msg.Ack(); ackErr != nil {
-			slog.Warn("ack failed for poison finding", "err", ackErr)
-			metrics.NATSDeliveryErrors.WithLabelValues("ack").Inc()
-		}
-		return
+// findingLifecycle plugs *v1.Finding into pullconsumer.Lifecycle.
+type findingLifecycle struct{}
+
+func (findingLifecycle) Unmarshal(data []byte) (*v1.Finding, error) {
+	var f v1.Finding
+	if err := proto.Unmarshal(data, &f); err != nil {
+		return nil, err
 	}
-	metrics.FindingsConsumed.Inc()
-
-	// Terminal-failure drop: AFTER MaxDeliver retries (NumDelivered counts
-	// from 1, so the Nth attempt has NumDelivered=N). We want to RUN the
-	// final allowed attempt and only drop messages JetStream is about to
-	// stop redelivering — i.e. NumDelivered > MaxDeliver. Pre-fix this used
-	// `>=`, silently losing the final attempt.
-	if c.opts.MaxDeliver > 0 {
-		if md, mdErr := msg.Metadata(); mdErr == nil && md.NumDelivered > uint64(c.opts.MaxDeliver) {
-			slog.Error("finding dropped after max deliveries",
-				"scan_id", finding.ScanId,
-				"finding_id", finding.FindingId,
-				"delivered", md.NumDelivered,
-				"max_deliver", c.opts.MaxDeliver,
-			)
-			metrics.NATSDeliveryErrors.WithLabelValues("max_deliver_exceeded").Inc()
-			if ackErr := msg.Ack(); ackErr != nil {
-				slog.Warn("ack failed for max-deliver-exceeded finding",
-					"scan_id", finding.ScanId,
-					"finding_id", finding.FindingId,
-					"err", ackErr,
-				)
-				metrics.NATSDeliveryErrors.WithLabelValues("ack").Inc()
-			}
-			return
-		}
-	}
-
-	// Recovery shim: a sink panic mustn't kill the worker. Log identity
-	// (not bytes), bump metric, fall through to Nak. Heartbeat goroutine
-	// is joined in ALL exit paths (success, error, panic) via the
-	// hbDone-on-defer pattern below — pre-fix the panic path skipped
-	// `close(stop); <-hbDone`, leaking a heartbeat goroutine that could
-	// fire `msg.InProgress()` after `msg.Nak()`.
-	var handlerErr error
-	func() {
-		hctx, cancel := context.WithCancel(ctx)
-		stop := make(chan struct{})
-		hbDone := make(chan struct{})
-		var stopOnce sync.Once
-		joinHeartbeat := func() {
-			stopOnce.Do(func() { close(stop) })
-			<-hbDone
-		}
-		defer func() {
-			cancel()
-			joinHeartbeat()
-			if r := recover(); r != nil {
-				slog.Error("writer handler panic",
-					"scan_id", finding.ScanId,
-					"finding_id", finding.FindingId,
-					"panic", r,
-				)
-				metrics.NATSDeliveryErrors.WithLabelValues("handler_panic").Inc()
-				handlerErr = fmt.Errorf("handler panic: %v", r)
-			}
-		}()
-
-		go func() {
-			defer close(hbDone)
-			t := time.NewTicker(heartbeat)
-			defer t.Stop()
-			for {
-				select {
-				case <-stop:
-					return
-				case <-hctx.Done():
-					return
-				case <-t.C:
-					_ = msg.InProgress()
-				}
-			}
-		}()
-
-		handlerErr = h(hctx, &finding)
-	}()
-
-	if handlerErr != nil {
-		slog.Error("writer handler", "scan_id", finding.ScanId, "finding_id", finding.FindingId, "err", handlerErr)
-		if nakErr := msg.Nak(); nakErr != nil {
-			slog.Warn("nak failed",
-				"scan_id", finding.ScanId,
-				"finding_id", finding.FindingId,
-				"err", nakErr,
-			)
-			metrics.NATSDeliveryErrors.WithLabelValues("nak").Inc()
-		}
-		return
-	}
-	if ackErr := msg.Ack(); ackErr != nil {
-		slog.Warn("ack failed",
-			"scan_id", finding.ScanId,
-			"finding_id", finding.FindingId,
-			"err", ackErr,
-		)
-		metrics.NATSDeliveryErrors.WithLabelValues("ack").Inc()
-	}
+	return &f, nil
 }
+
+func (findingLifecycle) LogFields(f *v1.Finding) []any {
+	return []any{"scan_id", f.ScanId, "finding_id", f.FindingId}
+}
+
+// findingMetrics maps pullconsumer.Metrics onto writer Prometheus counters.
+type findingMetrics struct{}
+
+func (findingMetrics) OnConsumed()           { metrics.FindingsConsumed.Inc() }
+func (findingMetrics) OnUnmarshalError()     { metrics.NATSDeliveryErrors.WithLabelValues("unmarshal").Inc() }
+func (findingMetrics) OnMaxDeliverExceeded() { metrics.NATSDeliveryErrors.WithLabelValues("max_deliver_exceeded").Inc() }
+func (findingMetrics) OnHandlerPanic()       { metrics.NATSDeliveryErrors.WithLabelValues("handler_panic").Inc() }
+func (findingMetrics) OnAckError()           { metrics.NATSDeliveryErrors.WithLabelValues("ack").Inc() }
+func (findingMetrics) OnNakError()           { metrics.NATSDeliveryErrors.WithLabelValues("nak").Inc() }

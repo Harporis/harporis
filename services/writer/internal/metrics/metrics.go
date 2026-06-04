@@ -3,8 +3,6 @@
 package metrics
 
 import (
-	"errors"
-	"log/slog"
 	"net/http"
 	"sync"
 
@@ -61,21 +59,3 @@ func Handler() http.Handler {
 
 // Registry exposes the custom registry for tests that need to Gather() directly.
 func Registry() *prometheus.Registry { return registry }
-
-// ServeAsync starts an HTTP server on addr that exposes /metrics, /healthz, and /readyz.
-// Returns the http.Server so main can Shutdown it gracefully. ListenAndServe
-// errors other than ErrServerClosed are logged at Error level so a port-in-use
-// failure is visible instead of silently leaving /metrics dark.
-func ServeAsync(addr string, healthzHandler, readyzHandler http.Handler) *http.Server {
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", Handler())
-	mux.Handle("/healthz", healthzHandler)
-	mux.Handle("/readyz", readyzHandler)
-	srv := &http.Server{Addr: addr, Handler: mux}
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("metrics server stopped", "addr", addr, "err", err)
-		}
-	}()
-	return srv
-}
