@@ -14,7 +14,7 @@ materializes detected secrets to durable sinks. v0.1 ships one sink:
 ## What it does
 
 - Pull-consumes `harporis.findings.>` via durable
-  `writer-pool-pull` (`wire.WriterDurableConsumer`) on the
+  `writer-pool` (`wire.WriterDurableConsumer`) on the
   `HARPORIS_FINDINGS` `WorkQueuePolicy` stream.
 - Serializes each `v1.Finding` to JSON (proto field names via
   `protojson.MarshalOptions{UseProtoNames: true}`) and appends one line
@@ -85,7 +85,7 @@ docker compose up -d --scale writer=2
 ```
 
 `WorkQueuePolicy` on `HARPORIS_FINDINGS` plus the shared durable
-`writer-pool-pull` consumer gives round-robin delivery across replicas
+`writer-pool` consumer gives round-robin delivery across replicas
 without queue-group plumbing.
 
 Storage caveat: with the default Docker named volume, scaling out only

@@ -44,8 +44,11 @@ const ScannerDurableConsumer = "scanner-pool"
 // WriterDurableConsumer is the durable consumer name shared by all writer
 // replicas — same pattern as ScannerDurableConsumer but bound to the
 // HARPORIS_FINDINGS stream. Round-robin across replicas falls out of
-// WorkQueuePolicy + shared durable name.
-const WriterDurableConsumer = "writer-pool-pull"
+// WorkQueuePolicy + shared durable name. The name matches ScannerDurableConsumer's
+// "scanner-pool" shape ("<service>-pool", no -pull suffix) — both are
+// pull consumers; the suffix carried no information and made dashboards
+// inconsistent.
+const WriterDurableConsumer = "writer-pool"
 
 // Wildcard subjects for cross-scan subscribers (history, audit, etc.).
 const (
