@@ -24,7 +24,7 @@ writer-test:
 all-test: cli-test getter-test scanner-test writer-test
 
 stack-up:
-	UID=$$(id -u) GID=$$(id -g) docker compose up -d --build --wait
+	env UID=$$(id -u) GID=$$(id -g) docker compose up -d --build --wait
 
 stack-down:
 	docker compose down

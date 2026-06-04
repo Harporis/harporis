@@ -213,8 +213,10 @@ bring_up_stack() {
     fi
   fi
   log "bringing up stack (nats + getter + scanner + writer)"
-  # UID/GID exported so the getter's host-mount of \$HOME is traversable.
-  if ! ( cd "$REPO_ROOT" && UID=$(id -u) GID=$(id -g) bash -c "$docker_runner compose up -d --build --wait" ) >/tmp/harporis-stack.log 2>&1; then
+  # UID is readonly in bash, so we use env(1) to set it for the subprocess
+  # only. The compose file reads ${UID:-1000}/${GID:-1000} for getter
+  # so host-mounted $HOME is traversable.
+  if ! ( cd "$REPO_ROOT" && env UID="$(id -u)" GID="$(id -g)" bash -c "$docker_runner compose up -d --build --wait" ) >/tmp/harporis-stack.log 2>&1; then
     cat /tmp/harporis-stack.log >&2
     warn "stack bring-up failed (see output above) — run \`make stack-up\` manually after fixing"
     return
