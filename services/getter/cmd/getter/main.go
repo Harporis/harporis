@@ -17,6 +17,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	kitscan "github.com/Harporis/harporis/kit/scan"
 
 	"github.com/Harporis/harporis/services/getter/internal/config"
 	"github.com/Harporis/harporis/services/getter/internal/filter"
@@ -121,7 +122,7 @@ func main() {
 
 func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Registry) func(context.Context, *v1.ScanRequest) error {
 	return func(ctx context.Context, req *v1.ScanRequest) error {
-		if err := scan.ValidateScanID(req.ScanId); err != nil {
+		if err := kitscan.ValidateScanID(req.ScanId); err != nil {
 			return fmt.Errorf("reject scan request: %w", err)
 		}
 		walkMode := walkModeFromProto(req.Type)
