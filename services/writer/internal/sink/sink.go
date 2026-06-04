@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	kitscan "github.com/Harporis/harporis/kit/scan"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -109,8 +111,13 @@ func (n *NDJSONFile) Write(ctx context.Context, f *v1.Finding) error {
 	if f == nil {
 		return fmt.Errorf("sink: nil Finding")
 	}
-	if f.ScanId == "" {
-		return fmt.Errorf("sink: Finding.scan_id is empty")
+	// SECURITY: scan_id is attacker-controlled (anyone with NATS publish
+	// access can craft a Finding) and is used verbatim in the output
+	// path below. Reject anything that doesn't match the shared
+	// allowlist BEFORE building the path; the containment check in
+	// acquire() is belt-and-suspenders.
+	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
+		return fmt.Errorf("sink: %w", err)
 	}
 	data, err := jsonMarshaller.Marshal(f)
 	if err != nil {
@@ -167,6 +174,16 @@ func (n *NDJSONFile) acquire(scanID string) (*scanFile, error) {
 		ev.mu.Unlock()
 	}
 	path := filepath.Join(n.rootDir, scanID+".ndjson")
+	// SECURITY: belt-and-suspenders containment — ValidateScanID upstream
+	// already rejects anything that could traverse, but a future bug
+	// (callers bypassing acquire()? validator regression?) must not
+	// silently escape rootDir. filepath.Clean has already normalized
+	// path; require it to live under rootDir + separator.
+	rootClean := filepath.Clean(n.rootDir)
+	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
+		n.mu.Unlock()
+		return nil, fmt.Errorf("sink: path %q escapes rootDir %q", path, n.rootDir)
+	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		n.mu.Unlock()

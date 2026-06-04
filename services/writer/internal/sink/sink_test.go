@@ -144,6 +144,38 @@ func TestNDJSONFile_RejectsEmptyScanID(t *testing.T) {
 	}
 }
 
+// SECURITY regression: attacker-controlled scan_id with traversal must
+// not escape rootDir. Pre-fix the sink trusted scan_id verbatim and
+// filepath.Join would resolve "../../etc/passwd" into a path outside
+// /var/lib/harporis/findings.
+func TestNDJSONFile_RejectsPathTraversalScanID(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewNDJSONFile(dir)
+	defer s.Close()
+	ctx := context.Background()
+	bad := []string{
+		"../../tmp/pwn",
+		"../etc/passwd",
+		"..",
+		"/etc/passwd",
+		"foo/bar",
+		"foo.bar",
+		"foo;rm",
+	}
+	for _, scanID := range bad {
+		f := &v1.Finding{ScanId: scanID, FindingId: "x"}
+		err := s.Write(ctx, f)
+		if err == nil {
+			t.Errorf("scan_id %q should have been rejected", scanID)
+		}
+	}
+	// And no surprise files materialized anywhere.
+	entries, _ := os.ReadDir(dir)
+	if len(entries) > 0 {
+		t.Errorf("unexpected files in rootDir after rejected writes: %v", entries)
+	}
+}
+
 func TestNDJSONFile_HonoursContextCancel(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewNDJSONFile(dir)
