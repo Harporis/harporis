@@ -5,9 +5,11 @@
 package config
 
 import (
+	"fmt"
 	"runtime"
 
 	kitcfg "github.com/Harporis/harporis/kit/config"
+	"github.com/Harporis/harporis/kit/nats/wire"
 )
 
 // Config holds runtime config for the scanner.
@@ -68,7 +70,7 @@ func applyDefaults(c *Config) {
 		c.PublishAckWaitSeconds = 5
 	}
 	if c.MetricsAddr == "" {
-		c.MetricsAddr = ":9101"
+		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceScanner])
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"

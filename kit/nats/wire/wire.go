@@ -54,6 +54,34 @@ const (
 	FindingsWildcardSubject = "harporis.findings.>"
 )
 
+// ServiceGetter, ServiceScanner, ServiceWriter are the canonical names
+// used as keys into MetricsPorts and elsewhere where a service is
+// referenced by string (compose-exec target, k8s label, log field).
+const (
+	ServiceGetter  = "getter"
+	ServiceScanner = "scanner"
+	ServiceWriter  = "writer"
+)
+
+// MetricsPorts is the single source of truth for which TCP port each
+// Harporis service exposes its Prometheus /metrics + /healthz + /readyz
+// endpoints on. Kept in sync with each service's Dockerfile EXPOSE
+// directive and the k8s deployment/service manifests (those are static
+// YAML so the duplication is necessary; this map covers every code
+// path that depends on the value).
+var MetricsPorts = map[string]int{
+	ServiceGetter:  9100,
+	ServiceScanner: 9101,
+	ServiceWriter:  9102,
+}
+
+// Services returns the canonical service names in a deterministic
+// order. Use this when iterating MetricsPorts so the order is stable
+// across runs (map iteration is not).
+func Services() []string {
+	return []string{ServiceGetter, ServiceScanner, ServiceWriter}
+}
+
 // Per-scan subject builders.
 func ChunksSubject(scanID string) string   { return "harporis.chunks." + scanID }
 func StatusSubject(scanID string) string   { return "harporis.status." + scanID }

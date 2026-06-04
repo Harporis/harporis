@@ -12,13 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Harporis/harporis/kit/nats/wire"
 	"github.com/Harporis/harporis/services/cli/internal/compose"
 )
-
-// servicePorts maps each in-stack service to the host:port its Prometheus
-// /metrics endpoint listens on (inside the container, since v0.1.0 ports
-// are no longer published to the host so --scale N works).
-var servicePorts = map[string]int{"getter": 9100, "scanner": 9101, "writer": 9102}
 
 func newMetricsCmd() *cobra.Command {
 	var (
@@ -39,9 +35,9 @@ func newMetricsCmd() *cobra.Command {
 				if url != "" {
 					return fetchAndPrintMetrics(url, re, cmd.OutOrStdout())
 				}
-				port, ok := servicePorts[service]
+				port, ok := wire.MetricsPorts[service]
 				if !ok {
-					return fmt.Errorf("unknown --service %q (want one of: getter, scanner, writer)", service)
+					return fmt.Errorf("unknown --service %q (want one of: %s)", service, strings.Join(wire.Services(), ", "))
 				}
 				co, err := compose.NewDefault()
 				if err != nil {

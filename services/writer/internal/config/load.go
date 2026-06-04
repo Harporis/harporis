@@ -4,9 +4,11 @@
 package config
 
 import (
+	"fmt"
 	"runtime"
 
 	kitcfg "github.com/Harporis/harporis/kit/config"
+	"github.com/Harporis/harporis/kit/nats/wire"
 )
 
 // Config holds runtime config for the writer.
@@ -75,7 +77,7 @@ func applyDefaults(c *Config) {
 		c.SARIFEnabled = &v
 	}
 	if c.MetricsAddr == "" {
-		c.MetricsAddr = ":9102"
+		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceWriter])
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"

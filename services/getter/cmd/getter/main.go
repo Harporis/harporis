@@ -31,7 +31,7 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "config/getter.yaml", "path to YAML config")
-	metricsPort := flag.Int("metrics-port", 9100, "Prometheus /metrics port")
+	metricsPort := flag.Int("metrics-port", wire.MetricsPorts[wire.ServiceGetter], "Prometheus /metrics port")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)

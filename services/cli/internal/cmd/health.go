@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Harporis/harporis/kit/nats/wire"
 	"github.com/Harporis/harporis/services/cli/internal/compose"
 	"github.com/Harporis/harporis/services/cli/internal/natscli"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
@@ -32,11 +33,9 @@ func newHealthCmd() *cobra.Command {
 			}
 
 			co, cerr := compose.NewDefault()
-			for _, svc := range []struct {
-				name string
-				port int
-			}{{"getter", 9100}, {"scanner", 9101}, {"writer", 9102}} {
-				row := svc.name + " /metrics"
+			for _, name := range wire.Services() {
+				port := wire.MetricsPorts[name]
+				row := name + " /metrics"
 				if cerr != nil {
 					t.Row(row, ui.ErrStyle.Render("DOWN"), "docker compose unavailable: "+cerr.Error())
 					continue
@@ -45,7 +44,7 @@ func newHealthCmd() *cobra.Command {
 				// (WSL2, remote DOCKER_HOST). 2s tripped on cold-daemon
 				// runs even with healthy services.
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				out, err := co.Exec(ctx, svc.name, "wget", "-qO-", fmt.Sprintf("http://localhost:%d/metrics", svc.port))
+				out, err := co.Exec(ctx, name, "wget", "-qO-", fmt.Sprintf("http://localhost:%d/metrics", port))
 				cancel()
 				if err != nil {
 					detail := strings.TrimSpace(out)
