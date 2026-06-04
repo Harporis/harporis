@@ -66,7 +66,7 @@ func main() {
 	defer cancel()
 
 	// NATS.
-	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATSURL, ClientName: "harporis-scanner"})
+	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATSURL, Token: cfg.NATSToken, ClientName: "harporis-scanner"})
 	if err != nil {
 		fatal("nats dial: %v", err)
 	}

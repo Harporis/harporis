@@ -55,6 +55,7 @@ type FiltersConfig struct {
 
 type NATSConfig struct {
 	URL        string             `yaml:"url"`
+	Token      string             `yaml:"token"`
 	JetStream  JetStreamConfig    `yaml:"jetstream"`
 	Consumer   ConsumerConfig     `yaml:"consumer"`
 }

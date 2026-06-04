@@ -151,6 +151,14 @@ export PATH=\"$PREFIX/bin:\$PATH\""
       export PATH="$PREFIX/bin:$PATH"
       ;;
   esac
+
+  # NATS auth: the dev stack ships with a fixed token (harporis-dev) so
+  # CLI commands that dial NATS directly (history, watch, cancel, up,
+  # health) need it in the operator's env. Idempotent rc append.
+  append_unique "$(rc_file)" 'harporis: NATS_TOKEN for dev stack' \
+    "# harporis: NATS_TOKEN for dev stack
+export NATS_TOKEN=\"\${NATS_TOKEN:-harporis-dev}\""
+  export NATS_TOKEN="${NATS_TOKEN:-harporis-dev}"
 }
 
 install_completion() {

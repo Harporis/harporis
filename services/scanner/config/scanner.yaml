@@ -1,4 +1,5 @@
 nats_url: ${NATS_URL:-nats://nats:4222}
+nats_token: ${NATS_TOKEN:-}      # empty = no auth (dev compose injects "harporis-dev")
 workers: 0                       # 0 = runtime.NumCPU()
 fetch_batch: 16
 fetch_max_wait_ms: 5000

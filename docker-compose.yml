@@ -26,12 +26,20 @@ services:
   nats:
     image: nats:2.10-alpine
     container_name: harporis-nats
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    # Config-file mode (replaces the inline -js -sd flags of v0.1) so token
+    # auth can be plumbed in. The conf does `authorization { token:
+    # $NATS_TOKEN }` and nats-server substitutes the env var at startup.
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    environment:
+      # Default keeps `docker compose up` working out of the box; rotate
+      # by exporting NATS_TOKEN in your shell or via .env.
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
     ports:
       - "4222:4222"   # client
       - "8222:8222"   # monitoring + /healthz
     volumes:
       - nats-data:/data
+      - ./deploy/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
     healthcheck:
       # The default nats image is scratch-based (no shell, no wget). The
       # -alpine variant has wget; the /healthz endpoint is the canonical
@@ -59,6 +67,7 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
       LOG_LEVEL: info
       WORK_DIR: /var/lib/harporis/scans
     expose:
@@ -104,6 +113,7 @@ services:
         condition: service_healthy
     environment:
       NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
       LOG_LEVEL: info
     expose:
       - "9101"
@@ -130,6 +140,7 @@ services:
         condition: service_healthy
     environment:
       NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
       LOG_LEVEL: info
     expose:
       - "9102"

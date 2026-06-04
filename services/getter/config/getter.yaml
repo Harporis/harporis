@@ -87,6 +87,7 @@ filters:
 
 nats:
   url: ${NATS_URL:-nats://localhost:4222}
+  token: ${NATS_TOKEN:-}        # empty = no auth (dev compose injects "harporis-dev")
   jetstream:
     requests_stream: HARPORIS_REQUESTS
     chunks_stream:   HARPORIS_CHUNKS

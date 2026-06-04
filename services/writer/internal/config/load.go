@@ -15,6 +15,7 @@ import (
 // Config holds runtime config for the writer.
 type Config struct {
 	NATSURL        string `yaml:"nats_url"`
+	NATSToken      string `yaml:"nats_token"`
 	Workers        int    `yaml:"workers"`
 	FetchBatch     int    `yaml:"fetch_batch"`
 	FetchMaxWaitMs int    `yaml:"fetch_max_wait_ms"`

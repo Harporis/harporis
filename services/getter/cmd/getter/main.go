@@ -51,7 +51,7 @@ func main() {
 	rootCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATS.URL, ClientName: "harporis-getter"})
+	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATS.URL, Token: cfg.NATS.Token, ClientName: "harporis-getter"})
 	if err != nil {
 		fatal("nats dial: %v", err)
 	}

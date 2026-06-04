@@ -56,7 +56,7 @@ func main() {
 	}
 
 	// NATS.
-	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATSURL, ClientName: "harporis-writer"})
+	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATSURL, Token: cfg.NATSToken, ClientName: "harporis-writer"})
 	if err != nil {
 		fatal("nats dial: %v", err)
 	}

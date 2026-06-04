@@ -4,6 +4,7 @@
 package natscli
 
 import (
+	"os"
 	"strings"
 
 	"github.com/Harporis/harporis/kit/nats/wire"
@@ -12,9 +13,15 @@ import (
 // Client wraps wire.Client and exposes helpers for cli use.
 type Client struct{ *wire.Client }
 
-// Dial connects to NATS and returns a Client.
+// Dial connects to NATS and returns a Client. NATS_TOKEN env var is
+// picked up automatically so the CLI matches the dev stack's auth
+// without each call site having to thread the token through.
 func Dial(url, clientName string) (*Client, error) {
-	c, err := wire.Dial(wire.DialConfig{URL: url, ClientName: clientName})
+	c, err := wire.Dial(wire.DialConfig{
+		URL:        url,
+		ClientName: clientName,
+		Token:      os.Getenv("NATS_TOKEN"),
+	})
 	if err != nil {
 		return nil, err
 	}
