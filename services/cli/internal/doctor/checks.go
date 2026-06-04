@@ -113,7 +113,14 @@ func (c ContainerMetricsCheck) Run(ctx context.Context) Result {
 	url := fmt.Sprintf("http://localhost:%d/metrics", c.Port)
 	out, err := c.Exec.Exec(ctx, c.Service, "wget", "-qO-", url)
 	if err != nil {
-		return Result{Name: c.Name(), OK: false, Detail: fmt.Sprintf("compose exec failed: %v", err)}
+		// out is wget's combined stderr+stdout — usually carries the
+		// real reason ("wget: server returned 5xx", "name does not
+		// resolve"). Prefer it over the bare exit status.
+		detail := strings.TrimSpace(out)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return Result{Name: c.Name(), OK: false, Detail: detail}
 	}
 	if !strings.Contains(out, "# HELP") && !strings.Contains(out, "# TYPE") {
 		return Result{Name: c.Name(), OK: false, Detail: "response not in Prometheus exposition format"}

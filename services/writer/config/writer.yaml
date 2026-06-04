@@ -1,6 +1,8 @@
 # Writer configuration. Values can be overridden via ${VAR:-default} env
 # substitution at load time. CLI flags override these in main.go.
-nats_url: "${HARPORIS_NATS_URL:-nats://nats:4222}"
+# Env var names match scanner/getter (NATS_URL, LOG_LEVEL) so a single
+# docker-compose `environment:` block applies to all services.
+nats_url: "${NATS_URL:-nats://nats:4222}"
 workers: 0                   # 0 = runtime.NumCPU()
 fetch_batch: 16
 fetch_max_wait_ms: 5000
@@ -9,4 +11,4 @@ max_deliver: 5
 max_ack_pending: 64
 output_dir: "${HARPORIS_OUTPUT_DIR:-/var/lib/harporis/findings}"
 metrics_addr: ":9102"
-log_level: "info"
+log_level: "${LOG_LEVEL:-info}"

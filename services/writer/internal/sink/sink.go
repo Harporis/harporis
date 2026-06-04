@@ -4,7 +4,9 @@
 package sink
 
 import (
+	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,37 +29,61 @@ type Sink interface {
 	Name() string
 }
 
+// ErrSinkClosed is returned by Write after Close has run.
+var ErrSinkClosed = errors.New("sink: closed")
+
+// DefaultMaxOpenFiles bounds how many *os.File handles the NDJSON sink
+// holds open simultaneously. Past this limit, the least-recently-used
+// scan's file is Synced + Closed; a future Write for that scan re-opens
+// (O_APPEND preserves data). Tuned conservatively against the typical
+// container RLIMIT_NOFILE of 1024.
+const DefaultMaxOpenFiles = 512
+
 // NDJSONFile writes one JSON-encoded Finding per line to
-// <rootDir>/<scan_id>.ndjson. One *os.File per scan_id is held open across
-// calls; a per-scan mutex serializes writes within the file while letting
-// distinct scans proceed in parallel. The file is opened with O_APPEND so
-// even if two writer replicas share the directory the kernel will linearize
-// individual write(2) calls up to PIPE_BUF (typically 4096 bytes).
+// <rootDir>/<scan_id>.ndjson. One *os.File per scan_id is held open
+// (bounded by maxOpen via LRU eviction). The file is opened with O_APPEND
+// so multiple writer replicas sharing the directory get kernel-linearized
+// write(2) calls up to PIPE_BUF (typically 4096 bytes).
 type NDJSONFile struct {
 	rootDir string
+	maxOpen int
 
-	mu    sync.Mutex
-	files map[string]*scanFile
+	mu      sync.Mutex
+	files   map[string]*list.Element // scanID → element holding *scanFile
+	lru     *list.List               // front = most recently used
+	closed  bool
 }
 
 type scanFile struct {
-	mu sync.Mutex
-	f  *os.File
+	mu     sync.Mutex
+	f      *os.File
+	scanID string
 }
 
 // NewNDJSONFile constructs a sink rooted at rootDir. The directory is
-// created if it doesn't exist (mode 0o755). Returns an error if the path
-// exists but isn't a writable directory.
+// created if it doesn't exist (mode 0o755). The sink will keep at most
+// maxOpen files open at a time; pass 0 to use DefaultMaxOpenFiles.
 func NewNDJSONFile(rootDir string) (*NDJSONFile, error) {
+	return NewNDJSONFileN(rootDir, DefaultMaxOpenFiles)
+}
+
+// NewNDJSONFileN is NewNDJSONFile with an explicit fd cap. Exposed for
+// tests that want to exercise eviction paths with small caps.
+func NewNDJSONFileN(rootDir string, maxOpen int) (*NDJSONFile, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
+	}
+	if maxOpen <= 0 {
+		maxOpen = DefaultMaxOpenFiles
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
 	return &NDJSONFile{
 		rootDir: rootDir,
-		files:   make(map[string]*scanFile),
+		maxOpen: maxOpen,
+		files:   make(map[string]*list.Element),
+		lru:     list.New(),
 	}, nil
 }
 
@@ -73,9 +99,9 @@ var jsonMarshaller = protojson.MarshalOptions{
 }
 
 // Write encodes f as JSON, appends a trailing newline, and writes it as a
-// single write(2) call. ctx is consulted before the file handle resolution
-// and before the actual write — cancellation during the write itself is not
-// preempted because os.File.Write does not honour context.
+// single write(2) call. ctx is consulted before file-handle resolution
+// and before the actual write — cancellation during the write itself is
+// not preempted because os.File.Write does not honour context.
 func (n *NDJSONFile) Write(ctx context.Context, f *v1.Finding) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -90,16 +116,19 @@ func (n *NDJSONFile) Write(ctx context.Context, f *v1.Finding) error {
 	if err != nil {
 		return fmt.Errorf("sink: marshal finding %s: %w", f.FindingId, err)
 	}
-	// Buffer the line (data + '\n') so we issue ONE write call.
-	line := make([]byte, 0, len(data)+1)
-	line = append(line, data...)
-	line = append(line, '\n')
+	// One write call: append the newline into the (slack-capacity) slice
+	// protojson returned. If the slice has no spare cap, this allocates;
+	// in practice protojson over-allocates so the append is in-place.
+	line := append(data, '\n')
 
-	sf, err := n.fileFor(f.ScanId)
+	// acquire returns sf with its mu LOCKED if successful. This atomic
+	// "find-or-open and lock" pattern is what fixes the Close-vs-Write
+	// race: Close cannot evict a file we already hold the lock on, and
+	// post-Close acquire fast-fails on n.closed.
+	sf, err := n.acquire(f.ScanId)
 	if err != nil {
 		return err
 	}
-	sf.mu.Lock()
 	defer sf.mu.Unlock()
 	if _, err := sf.f.Write(line); err != nil {
 		return fmt.Errorf("sink: write scan %s: %w", f.ScanId, err)
@@ -107,31 +136,68 @@ func (n *NDJSONFile) Write(ctx context.Context, f *v1.Finding) error {
 	return nil
 }
 
-// fileFor returns (creating if necessary) the open file for a scan id.
-// The returned *scanFile's mutex is NOT held — callers acquire it.
-func (n *NDJSONFile) fileFor(scanID string) (*scanFile, error) {
+// acquire returns sf with sf.mu LOCKED. Callers MUST Unlock. Returns
+// ErrSinkClosed once Close has run.
+func (n *NDJSONFile) acquire(scanID string) (*scanFile, error) {
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	if sf, ok := n.files[scanID]; ok {
+	if n.closed {
+		n.mu.Unlock()
+		return nil, ErrSinkClosed
+	}
+	if el, ok := n.files[scanID]; ok {
+		n.lru.MoveToFront(el)
+		sf := el.Value.(*scanFile)
+		// Lock sf.mu BEFORE releasing n.mu so Close (which takes n.mu
+		// then walks the LRU) cannot Close the file under us.
+		sf.mu.Lock()
+		n.mu.Unlock()
 		return sf, nil
+	}
+	// Miss: enforce cap by evicting the LRU tail (with its own lock,
+	// held briefly under n.mu). Eviction Close-syncs the file; a
+	// subsequent Write for that scan will re-open via O_APPEND.
+	for len(n.files) >= n.maxOpen && n.lru.Len() > 0 {
+		oldest := n.lru.Back()
+		n.lru.Remove(oldest)
+		ev := oldest.Value.(*scanFile)
+		delete(n.files, ev.scanID)
+		ev.mu.Lock()
+		_ = ev.f.Sync()
+		_ = ev.f.Close()
+		ev.mu.Unlock()
 	}
 	path := filepath.Join(n.rootDir, scanID+".ndjson")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
+		n.mu.Unlock()
 		return nil, fmt.Errorf("sink: open %s: %w", path, err)
 	}
-	sf := &scanFile{f: f}
-	n.files[scanID] = sf
+	sf := &scanFile{f: f, scanID: scanID}
+	el := n.lru.PushFront(sf)
+	n.files[scanID] = el
+	sf.mu.Lock()
+	n.mu.Unlock()
 	return sf, nil
 }
 
-// Close flushes and releases all open scan files. Safe to call multiple
-// times — subsequent calls find an empty file map and return nil.
+// Close flushes and releases all open scan files. Idempotent: subsequent
+// Close calls return nil, and any Write that arrives after Close returns
+// ErrSinkClosed (no silent file re-open).
 func (n *NDJSONFile) Close() error {
 	n.mu.Lock()
-	defer n.mu.Unlock()
+	if n.closed {
+		n.mu.Unlock()
+		return nil
+	}
+	n.closed = true
+	files := n.files
+	n.files = nil
+	n.lru = list.New()
+	n.mu.Unlock()
+
 	var firstErr error
-	for id, sf := range n.files {
+	for id, el := range files {
+		sf := el.Value.(*scanFile)
 		sf.mu.Lock()
 		if err := sf.f.Sync(); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("sink: sync %s: %w", id, err)
@@ -141,6 +207,5 @@ func (n *NDJSONFile) Close() error {
 		}
 		sf.mu.Unlock()
 	}
-	n.files = make(map[string]*scanFile)
 	return firstErr
 }

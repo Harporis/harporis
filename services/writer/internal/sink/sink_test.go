@@ -168,6 +168,108 @@ func TestNDJSONFile_CloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestNDJSONFile_WriteAfterCloseReturnsErrSinkClosed(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewNDJSONFile(dir)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Write(context.Background(), mkFinding("scan-A", "f-1", "r", v1.Severity_LOW))
+	if !errors.Is(err, ErrSinkClosed) {
+		t.Fatalf("expected ErrSinkClosed, got %v", err)
+	}
+}
+
+// Stress: many concurrent Writers + a Close racing in the middle.
+// Pre-fix this either tore lines or wrote to a closed fd; post-fix the
+// successful subset must be valid JSON and the rest must come back as
+// ErrSinkClosed cleanly.
+func TestNDJSONFile_ConcurrentWritesAndClose(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewNDJSONFile(dir)
+	ctx := context.Background()
+	const N = 500
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			err := s.Write(ctx, mkFinding("scan-R", "f-"+strconv.Itoa(i), "r", v1.Severity_MEDIUM))
+			if err != nil && !errors.Is(err, ErrSinkClosed) {
+				t.Errorf("unexpected err %d: %v", i, err)
+			}
+		}(i)
+		// Trigger Close roughly midway through the goroutine fan-out.
+		if i == N/2 {
+			go func() {
+				if err := s.Close(); err != nil {
+					t.Errorf("close: %v", err)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	// Whatever survived must be valid JSON, one line each, no torn lines.
+	f, err := os.Open(filepath.Join(dir, "scan-R.ndjson"))
+	if err != nil {
+		// Allowed: Close ran before any Write opened the file.
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1<<20), 1<<20)
+	for sc.Scan() {
+		var m map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+			t.Fatalf("torn line: %s", sc.Text())
+		}
+	}
+}
+
+func TestNDJSONFile_LRUEvictsOldest(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewNDJSONFileN(dir, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// Open 3 scans against cap=2: third one must evict scan-A.
+	for _, id := range []string{"scan-A", "scan-B", "scan-C"} {
+		if err := s.Write(ctx, mkFinding(id, "f-1", "r", v1.Severity_LOW)); err != nil {
+			t.Fatalf("write %s: %v", id, err)
+		}
+	}
+	// Internal: only 2 files should be in the map; scan-A evicted.
+	s.mu.Lock()
+	got := len(s.files)
+	_, aOpen := s.files["scan-A"]
+	s.mu.Unlock()
+	if got != 2 {
+		t.Errorf("expected 2 open files, got %d", got)
+	}
+	if aOpen {
+		t.Errorf("scan-A should have been evicted")
+	}
+	// Re-write scan-A: O_APPEND preserves data, file reopens.
+	if err := s.Write(ctx, mkFinding("scan-A", "f-2", "r", v1.Severity_LOW)); err != nil {
+		t.Fatalf("re-open scan-A: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// scan-A must have BOTH findings (eviction didn't truncate).
+	body, _ := os.ReadFile(filepath.Join(dir, "scan-A.ndjson"))
+	lines := 0
+	for _, b := range body {
+		if b == '\n' {
+			lines++
+		}
+	}
+	if lines != 2 {
+		t.Errorf("scan-A.ndjson has %d lines after evict+reopen, want 2", lines)
+	}
+}
+
 func open(t *testing.T, path string) *os.File {
 	t.Helper()
 	f, err := os.Open(path)

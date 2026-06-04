@@ -86,3 +86,20 @@ func TestContainerMetricsCheck_BadResponseBody(t *testing.T) {
 		t.Fatalf("detail did not flag format: %q", r.Detail)
 	}
 }
+
+// Failed exec with stderr body (e.g. wget's HTTP-error report) should
+// surface that body in Result.Detail, not the bare exit-status error.
+func TestContainerMetricsCheck_SurfacesStderrOnFailure(t *testing.T) {
+	exec := &fakeExecer{
+		out: "wget: server returned error: HTTP/1.1 500 Internal Server Error",
+		err: errors.New("exit status 1"),
+	}
+	c := ContainerMetricsCheck{Service: "scanner", Port: 9101, Exec: exec}
+	r := c.Run(context.Background())
+	if r.OK {
+		t.Fatalf("expected fail, got %+v", r)
+	}
+	if !strings.Contains(r.Detail, "HTTP/1.1 500") {
+		t.Fatalf("detail did not surface wget stderr: %q", r.Detail)
+	}
+}

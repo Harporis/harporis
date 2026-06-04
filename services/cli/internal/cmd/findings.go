@@ -42,16 +42,23 @@ func newFindingsShowCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("docker compose not available: %w (pass --output-dir for host file access)", err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			body, err := co.Exec(ctx, "writer", "cat", path)
 			if err != nil {
-				return fmt.Errorf("compose exec writer cat %s: %w", path, err)
+				// CombinedOutput leaves stderr in body — surface it so
+				// "no such file" / "permission denied" reach the user
+				// instead of a bare "exit status 1".
+				detail := strings.TrimSpace(body)
+				if detail == "" {
+					detail = err.Error()
+				}
+				return fmt.Errorf("compose exec writer cat %s: %s", path, detail)
 			}
 			if _, err := cmd.OutOrStdout().Write([]byte(body)); err != nil {
 				return err
 			}
-			if !strings.HasSuffix(body, "\n") {
+			if body != "" && !strings.HasSuffix(body, "\n") {
 				fmt.Fprintln(cmd.OutOrStdout())
 			}
 			return nil
@@ -74,13 +81,15 @@ func newFindingsListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("docker compose not available: %w (pass --output-dir for host file access)", err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			// `ls -1` prints one filename per line; suppress stderr so an empty
-			// dir doesn't poison the output.
-			body, err := co.Exec(ctx, "writer", "sh", "-c", "ls -1 /var/lib/harporis/findings 2>/dev/null")
+			body, err := co.Exec(ctx, "writer", "ls", "-1", "/var/lib/harporis/findings")
 			if err != nil {
-				return fmt.Errorf("compose exec writer ls: %w", err)
+				detail := strings.TrimSpace(body)
+				if detail == "" {
+					detail = err.Error()
+				}
+				return fmt.Errorf("compose exec writer ls: %s", detail)
 			}
 			body = strings.TrimSpace(body)
 			if body == "" {
@@ -128,9 +137,12 @@ func listLocalDir(dir string, w io.Writer) error {
 	return nil
 }
 
-// validScanID is a defensive guard against shell metacharacters reaching
-// the `cat` invocation under `docker compose exec`. UUIDv4 plus any
-// scan_id the codebase generates fits in [A-Za-z0-9._-].
+// validScanID mirrors getter's ValidateScanID alphabet exactly
+// ([A-Za-z0-9_-], length ≤128) so the CLI rejects any scan_id the
+// server would. Period is NOT allowed even though `cat` via docker
+// compose exec uses argv (not a shell) — keeping the validator
+// synchronized prevents user confusion when CLI accepts a string the
+// rest of the pipeline rejects.
 func validScanID(s string) bool {
 	if s == "" || len(s) > 128 {
 		return false
@@ -140,7 +152,7 @@ func validScanID(s string) bool {
 		case r >= 'A' && r <= 'Z',
 			r >= 'a' && r <= 'z',
 			r >= '0' && r <= '9',
-			r == '-', r == '_', r == '.':
+			r == '-', r == '_':
 			continue
 		default:
 			return false

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	natsclient "github.com/nats-io/nats.go"
@@ -84,6 +85,13 @@ func (c *ChunksConsumer) Run(ctx context.Context, h ChunkHandler) error {
 			if ctx.Err() != nil {
 				return nil
 			}
+			// Drain or connection-closed during graceful shutdown is
+			// expected; exit cleanly without warn spam.
+			if errors.Is(err, natsclient.ErrBadSubscription) ||
+				errors.Is(err, natsclient.ErrConnectionClosed) ||
+				errors.Is(err, natsclient.ErrConnectionDraining) {
+				return nil
+			}
 			slog.Warn("scanner fetch", "err", err, "backoff_ms", backoff.Milliseconds())
 			// Exponential backoff: 100ms, 200ms, 400ms, ..., capped at 5s.
 			if backoff == 0 {
@@ -121,12 +129,13 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 	}
 	metrics.ChunksConsumed.Inc()
 
-	// Terminal-failure drop: if JetStream has already delivered this message
-	// MaxDeliver times, the next Nak would either redeliver again or trigger
-	// server-side drop depending on policy. Ack here so the stream unblocks,
-	// and surface the event in metrics + ERROR log (spec §4.5 / §6.1).
+	// Terminal-failure drop: AFTER MaxDeliver retries (NumDelivered counts
+	// from 1, so the Nth attempt has NumDelivered=N). We want to RUN the
+	// final allowed attempt and only drop messages JetStream is about to
+	// stop redelivering — i.e. NumDelivered > MaxDeliver. Pre-fix this used
+	// `>=`, silently dropping the final attempt.
 	if c.opts.MaxDeliver > 0 {
-		if md, mdErr := msg.Metadata(); mdErr == nil && md.NumDelivered >= uint64(c.opts.MaxDeliver) {
+		if md, mdErr := msg.Metadata(); mdErr == nil && md.NumDelivered > uint64(c.opts.MaxDeliver) {
 			slog.Error("chunk dropped after max deliveries",
 				"scan_id", chunk.ScanId,
 				"chunk_id", chunk.ChunkId,
@@ -148,13 +157,23 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 
 	// Recovery shim: a panic in the handler must not kill the worker
 	// goroutine. JetStream would otherwise redeliver to another replica
-	// and crash that one too. We log the panic with the chunk identity
-	// (NOT the payload bytes), bump a drop metric, and fall through to
-	// Nak — bounded by MaxDeliver so a deterministic panic doesn't loop
-	// forever.
+	// and crash that one too. Heartbeat goroutine is joined in ALL exit
+	// paths (success, error, panic) — pre-fix the panic path skipped
+	// `close(stop); <-hbDone`, leaking a heartbeat goroutine that could
+	// fire `msg.InProgress()` after `msg.Nak()`.
 	var handlerErr error
 	func() {
+		hctx, cancel := context.WithCancel(ctx)
+		stop := make(chan struct{})
+		hbDone := make(chan struct{})
+		var stopOnce sync.Once
+		joinHeartbeat := func() {
+			stopOnce.Do(func() { close(stop) })
+			<-hbDone
+		}
 		defer func() {
+			cancel()
+			joinHeartbeat()
 			if r := recover(); r != nil {
 				slog.Error("scanner handler panic",
 					"scan_id", chunk.ScanId,
@@ -166,10 +185,6 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 			}
 		}()
 
-		hctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		stop := make(chan struct{})
-		hbDone := make(chan struct{})
 		go func() {
 			defer close(hbDone)
 			t := time.NewTicker(heartbeat)
@@ -189,8 +204,6 @@ func (c *ChunksConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h C
 		start := time.Now()
 		handlerErr = h(hctx, &chunk)
 		metrics.ChunkProcessingSeconds.WithLabelValues(chunk.Kind.String()).Observe(time.Since(start).Seconds())
-		close(stop)
-		<-hbDone
 	}()
 
 	if handlerErr != nil {

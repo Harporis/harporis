@@ -3,6 +3,8 @@
 package metrics
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -61,8 +63,9 @@ func Handler() http.Handler {
 func Registry() *prometheus.Registry { return registry }
 
 // ServeAsync starts an HTTP server on addr that exposes /metrics, /healthz, and /readyz.
-// Returns the http.Server so main can Shutdown it gracefully. Fatal listen
-// errors are logged at Warn level.
+// Returns the http.Server so main can Shutdown it gracefully. ListenAndServe
+// errors other than ErrServerClosed are logged at Error level so a port-in-use
+// failure is visible instead of silently leaving /metrics dark.
 func ServeAsync(addr string, healthzHandler, readyzHandler http.Handler) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", Handler())
@@ -70,7 +73,9 @@ func ServeAsync(addr string, healthzHandler, readyzHandler http.Handler) *http.S
 	mux.Handle("/readyz", readyzHandler)
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
-		_ = srv.ListenAndServe()
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server stopped", "addr", addr, "err", err)
+		}
 	}()
 	return srv
 }

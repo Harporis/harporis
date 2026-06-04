@@ -48,7 +48,20 @@ func TestBuildSourceRemoteSSH(t *testing.T) {
 	}
 }
 
+// stubStat lets tests pretend a set of paths exists on the host
+// without touching the filesystem.
+func stubStat(existing map[string]bool) func(string) (os.FileInfo, error) {
+	return func(p string) (os.FileInfo, error) {
+		if existing[p] {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+}
+
 func TestTranslateLocalPath_EmptyPassthrough(t *testing.T) {
+	hostPathStat = stubStat(nil)
+	defer func() { hostPathStat = os.Stat }()
 	got, err := translateLocalPath("", "/home/u", true)
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +72,8 @@ func TestTranslateLocalPath_EmptyPassthrough(t *testing.T) {
 }
 
 func TestTranslateLocalPath_NoMountHostPassthrough(t *testing.T) {
+	hostPathStat = stubStat(nil)
+	defer func() { hostPathStat = os.Stat }()
 	got, err := translateLocalPath("/home/u/code/repo", "/home/u", false)
 	if err != nil {
 		t.Fatal(err)
@@ -68,8 +83,12 @@ func TestTranslateLocalPath_NoMountHostPassthrough(t *testing.T) {
 	}
 }
 
-func TestTranslateLocalPath_ContainerNativePassthrough(t *testing.T) {
-	for _, p := range []string{"/repos/leaky", "/host/code/x", "/var/lib/foo", "/tmp/bar"} {
+// Paths that don't exist on the host are assumed container-native and
+// pass through unchanged — this matches the override-file workflow.
+func TestTranslateLocalPath_ContainerNativeNotOnHost(t *testing.T) {
+	hostPathStat = stubStat(nil)
+	defer func() { hostPathStat = os.Stat }()
+	for _, p := range []string{"/repos/leaky", "/repos/anything", "/var/cache/foo"} {
 		got, err := translateLocalPath(p, "/home/u", true)
 		if err != nil {
 			t.Errorf("%s: err=%v", p, err)
@@ -81,6 +100,8 @@ func TestTranslateLocalPath_ContainerNativePassthrough(t *testing.T) {
 }
 
 func TestTranslateLocalPath_HomeTranslated(t *testing.T) {
+	hostPathStat = stubStat(map[string]bool{"/home/u/code/repo": true})
+	defer func() { hostPathStat = os.Stat }()
 	got, err := translateLocalPath("/home/u/code/repo", "/home/u", true)
 	if err != nil {
 		t.Fatal(err)
@@ -90,10 +111,26 @@ func TestTranslateLocalPath_HomeTranslated(t *testing.T) {
 	}
 }
 
-func TestTranslateLocalPath_OutsideHomeRejected(t *testing.T) {
+// A directory whose name starts with two dots (~/..staging) is a valid
+// $HOME-relative path and must translate, not be rejected.
+func TestTranslateLocalPath_DotDotPrefixedNameAllowed(t *testing.T) {
+	hostPathStat = stubStat(map[string]bool{"/home/u/..staging/repo": true})
+	defer func() { hostPathStat = os.Stat }()
+	got, err := translateLocalPath("/home/u/..staging/repo", "/home/u", true)
+	if err != nil {
+		t.Fatalf("..staging should be allowed: %v", err)
+	}
+	if got != "/host/..staging/repo" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestTranslateLocalPath_OutsideHomeButOnHostRejected(t *testing.T) {
+	hostPathStat = stubStat(map[string]bool{"/srv/elsewhere": true})
+	defer func() { hostPathStat = os.Stat }()
 	_, err := translateLocalPath("/srv/elsewhere", "/home/u", true)
 	if err == nil {
-		t.Fatal("expected error for path outside $HOME")
+		t.Fatal("expected error for host path outside $HOME")
 	}
 	if !strings.Contains(err.Error(), "--no-mount-host") {
 		t.Fatalf("error message should mention the opt-out flag: %v", err)
@@ -101,9 +138,11 @@ func TestTranslateLocalPath_OutsideHomeRejected(t *testing.T) {
 }
 
 func TestTranslateLocalPath_EmptyHomeRejected(t *testing.T) {
+	hostPathStat = stubStat(map[string]bool{"/some/path": true})
+	defer func() { hostPathStat = os.Stat }()
 	_, err := translateLocalPath("/some/path", "", true)
 	if err == nil {
-		t.Fatal("expected error when $HOME is empty and mount-host is on")
+		t.Fatal("expected error when $HOME is empty and host path exists")
 	}
 }
 

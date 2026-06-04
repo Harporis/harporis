@@ -41,11 +41,18 @@ func newHealthCmd() *cobra.Command {
 					t.Row(row, ui.ErrStyle.Render("DOWN"), "docker compose unavailable: "+cerr.Error())
 					continue
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				// 5s budget accommodates Docker daemon RTT on slow setups
+				// (WSL2, remote DOCKER_HOST). 2s tripped on cold-daemon
+				// runs even with healthy services.
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				out, err := co.Exec(ctx, svc.name, "wget", "-qO-", fmt.Sprintf("http://localhost:%d/metrics", svc.port))
 				cancel()
 				if err != nil {
-					t.Row(row, ui.ErrStyle.Render("DOWN"), strings.TrimSpace(err.Error()))
+					detail := strings.TrimSpace(out)
+					if detail == "" {
+						detail = strings.TrimSpace(err.Error())
+					}
+					t.Row(row, ui.ErrStyle.Render("DOWN"), detail)
 				} else if !strings.Contains(out, "# HELP") && !strings.Contains(out, "# TYPE") {
 					t.Row(row, ui.WarnStyle.Render("DEGRADED"), "response not in Prometheus exposition format")
 				} else {

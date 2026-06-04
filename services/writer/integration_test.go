@@ -57,7 +57,7 @@ func TestEndToEnd_PublishedFindingMaterializesNDJSON(t *testing.T) {
 		"-config", "config/writer.yaml",
 		"-output-dir", outputDir,
 	)
-	cmd.Env = append(os.Environ(), "HARPORIS_NATS_URL="+s.ClientURL())
+	cmd.Env = append(os.Environ(), "NATS_URL="+s.ClientURL())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

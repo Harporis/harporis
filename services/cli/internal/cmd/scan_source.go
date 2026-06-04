@@ -10,42 +10,43 @@ import (
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
 
-// containerNativePrefixes lists path prefixes that mean "already a path
-// inside the getter container" — so they pass through translation
-// unchanged. /repos preserves the legacy override-file workflow
-// (where users mount their repo at /repos/<name>); /host is the new
-// auto-mount we added in docker-compose.yml.
-var containerNativePrefixes = []string{"/host/", "/repos/", "/var/", "/etc/", "/tmp/"}
+// hostPathStat is the indirection used by translateLocalPath to check
+// whether a path exists on the host. Real call goes to os.Stat; tests
+// override it.
+var hostPathStat = os.Stat
 
 // translateLocalPath converts a host-side absolute path to the
 // container-side path the getter will see. When mountHost is true and
-// the path lies under home (typically $HOME), it is rewritten to
-// /host/<relative>. When mountHost is false, or the path is already a
-// container-native path (one of containerNativePrefixes), it is
-// returned unchanged. A host path outside home with mountHost=true is
-// rejected with a helpful error pointing at the opt-out flag.
+// the path lies under home (typically $HOME) AND exists on the host,
+// it is rewritten to /host/<relative>. Paths that do NOT exist on the
+// host are treated as already container-native (the user gave us a
+// path that lives inside the getter container, e.g. /repos/leaky via
+// docker-compose.override.yml) and pass through unchanged.
+// When mountHost is false, the path is always passed through unchanged.
 //
 // Empty `local` and empty `home` are handled gracefully: this lets the
-// scan command call it unconditionally, and skips work when there's
+// scan command call it unconditionally and skips work when there's
 // nothing to translate.
 func translateLocalPath(local, home string, mountHost bool) (string, error) {
 	if local == "" {
 		return local, nil
 	}
-	// User explicitly opted out → no translation, pass the value
-	// straight through to the proto. This preserves the legacy
-	// override-file workflow for anyone who needs it.
+	// User explicitly opted out → no translation. Preserves the legacy
+	// override-file workflow for paths inside the container.
 	if !mountHost {
 		return local, nil
 	}
-	for _, p := range containerNativePrefixes {
-		if strings.HasPrefix(local, p) {
-			return local, nil
-		}
+	// If the path doesn't exist on the host, assume the user is
+	// referencing a container-internal path mounted via the override
+	// file (e.g. /repos/leaky). Pass through unchanged — the getter
+	// will validate it server-side and surface a clean error if it's
+	// wrong.
+	if _, err := hostPathStat(local); err != nil {
+		return local, nil
 	}
 	if home == "" {
 		return "", fmt.Errorf(
-			"--local %q: $HOME is empty so the path cannot be auto-translated; pass --no-mount-host and use a container-native path (e.g. /repos/myrepo)",
+			"--local %q exists on host but $HOME is empty so the path cannot be auto-translated; pass --no-mount-host and use a container-native path (e.g. /repos/myrepo)",
 			local,
 		)
 	}
@@ -54,9 +55,16 @@ func translateLocalPath(local, home string, mountHost bool) (string, error) {
 		return "", fmt.Errorf("--local %q: %w", local, err)
 	}
 	rel, err := filepath.Rel(home, abs)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == "." || rel == "" {
+	if err != nil {
 		return "", fmt.Errorf(
-			"--local %q is outside $HOME (%s); either move it under $HOME, mount it via docker-compose.override.yml, or pass --no-mount-host with the container-side path",
+			"--local %q is not under $HOME (%s); either move it under $HOME, mount it via docker-compose.override.yml, or pass --no-mount-host",
+			local, home,
+		)
+	}
+	sep := string(filepath.Separator)
+	if rel == "." || rel == "" || rel == ".." || strings.HasPrefix(rel, ".."+sep) {
+		return "", fmt.Errorf(
+			"--local %q is not under $HOME (%s); either move it under $HOME, mount it via docker-compose.override.yml, or pass --no-mount-host",
 			local, home,
 		)
 	}

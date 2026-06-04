@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	natsclient "github.com/nats-io/nats.go"
@@ -40,6 +41,12 @@ type FindingsConsumer struct {
 	opts ConsumerOptions
 }
 
+// DefaultInactiveThreshold is how long a writer durable consumer lingers
+// without an active subscriber before JetStream tears it down. If the
+// writer is scaled to 0 longer than this, the consumer is reclaimed so
+// pending findings don't block the WorkQueuePolicy stream forever.
+const DefaultInactiveThreshold = 24 * time.Hour
+
 // NewFindingsConsumer creates the durable pull subscription. Must be called
 // once per process; concurrent replicas sharing wire.WriterDurableConsumer
 // fan out automatically.
@@ -53,6 +60,7 @@ func NewFindingsConsumer(js natsclient.JetStreamContext, opts ConsumerOptions) (
 		natsclient.AckWait(ackWait),
 		natsclient.MaxDeliver(opts.MaxDeliver),
 		natsclient.MaxAckPending(opts.MaxAckPending),
+		natsclient.InactiveThreshold(DefaultInactiveThreshold),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("pull subscribe: %w", err)
@@ -84,6 +92,13 @@ func (c *FindingsConsumer) Run(ctx context.Context, h FindingHandler) error {
 				continue
 			}
 			if ctx.Err() != nil {
+				return nil
+			}
+			// Drain or connection-closed during graceful shutdown is
+			// expected and not error-worthy; log at Debug only.
+			if errors.Is(err, natsclient.ErrBadSubscription) ||
+				errors.Is(err, natsclient.ErrConnectionClosed) ||
+				errors.Is(err, natsclient.ErrConnectionDraining) {
 				return nil
 			}
 			slog.Warn("writer fetch", "err", err, "backoff_ms", backoff.Milliseconds())
@@ -122,10 +137,13 @@ func (c *FindingsConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h
 	}
 	metrics.FindingsConsumed.Inc()
 
-	// Terminal-failure drop: after MaxDeliver retries, Ack + log + count
-	// so the stream unblocks.
+	// Terminal-failure drop: AFTER MaxDeliver retries (NumDelivered counts
+	// from 1, so the Nth attempt has NumDelivered=N). We want to RUN the
+	// final allowed attempt and only drop messages JetStream is about to
+	// stop redelivering — i.e. NumDelivered > MaxDeliver. Pre-fix this used
+	// `>=`, silently losing the final attempt.
 	if c.opts.MaxDeliver > 0 {
-		if md, mdErr := msg.Metadata(); mdErr == nil && md.NumDelivered >= uint64(c.opts.MaxDeliver) {
+		if md, mdErr := msg.Metadata(); mdErr == nil && md.NumDelivered > uint64(c.opts.MaxDeliver) {
 			slog.Error("finding dropped after max deliveries",
 				"scan_id", finding.ScanId,
 				"finding_id", finding.FindingId,
@@ -146,10 +164,24 @@ func (c *FindingsConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h
 	}
 
 	// Recovery shim: a sink panic mustn't kill the worker. Log identity
-	// (not bytes), bump metric, fall through to Nak.
+	// (not bytes), bump metric, fall through to Nak. Heartbeat goroutine
+	// is joined in ALL exit paths (success, error, panic) via the
+	// hbDone-on-defer pattern below — pre-fix the panic path skipped
+	// `close(stop); <-hbDone`, leaking a heartbeat goroutine that could
+	// fire `msg.InProgress()` after `msg.Nak()`.
 	var handlerErr error
 	func() {
+		hctx, cancel := context.WithCancel(ctx)
+		stop := make(chan struct{})
+		hbDone := make(chan struct{})
+		var stopOnce sync.Once
+		joinHeartbeat := func() {
+			stopOnce.Do(func() { close(stop) })
+			<-hbDone
+		}
 		defer func() {
+			cancel()
+			joinHeartbeat()
 			if r := recover(); r != nil {
 				slog.Error("writer handler panic",
 					"scan_id", finding.ScanId,
@@ -161,10 +193,6 @@ func (c *FindingsConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h
 			}
 		}()
 
-		hctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		stop := make(chan struct{})
-		hbDone := make(chan struct{})
 		go func() {
 			defer close(hbDone)
 			t := time.NewTicker(heartbeat)
@@ -182,8 +210,6 @@ func (c *FindingsConsumer) handleOne(ctx context.Context, msg *natsclient.Msg, h
 		}()
 
 		handlerErr = h(hctx, &finding)
-		close(stop)
-		<-hbDone
 	}()
 
 	if handlerErr != nil {
