@@ -138,6 +138,10 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+    # Run as the host user so findings/ on the host bind-mount is
+    # writable AND files land owned by the operator (not uid 100). Same
+    # pattern getter uses for the read-only $HOME mount.
+    user: "${UID:-1000}:${GID:-1000}"
     environment:
       NATS_URL: nats://nats:4222
       NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
@@ -145,11 +149,13 @@ services:
     expose:
       - "9102"
     volumes:
-      # Findings are materialized to this named volume so the host (and
-      # `harporis findings show`) can inspect them without exposing a port.
-      # Bind-mount to a host path via docker-compose.override.yml if you
-      # want them on the host filesystem directly.
-      - findings-data:/var/lib/harporis/findings
+      # Findings land on the host filesystem directly. Default is
+      # ./findings (next to docker-compose.yml); override with
+      # HARPORIS_FINDINGS_DIR for a different host location, e.g.:
+      #   HARPORIS_FINDINGS_DIR=/srv/audit/harporis docker compose up
+      # An absolute host path is recommended; a relative path is
+      # resolved relative to the compose file directory.
+      - "${HARPORIS_FINDINGS_DIR:-./findings}:/var/lib/harporis/findings"
     healthcheck:
       # Same TCP-probe pattern as the other services. 9102 opens after
       # metrics.ServeAsync runs, so this doubles as a readiness signal.
@@ -164,4 +170,3 @@ services:
 
 volumes:
   nats-data:
-  findings-data:
