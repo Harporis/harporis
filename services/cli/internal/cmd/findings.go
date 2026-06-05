@@ -162,9 +162,24 @@ func newFindingsListCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "(no findings yet)")
 				return nil
 			}
+			// The writer emits both <id>.ndjson and <id>.sarif per scan;
+			// dedup to one row per scan_id, ignore tempfiles.
+			seen := make(map[string]struct{})
 			for _, name := range strings.Split(body, "\n") {
 				name = strings.TrimSpace(name)
-				fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSuffix(name, ".ndjson"))
+				switch {
+				case strings.HasSuffix(name, ".ndjson"):
+					name = strings.TrimSuffix(name, ".ndjson")
+				case strings.HasSuffix(name, ".sarif"):
+					name = strings.TrimSuffix(name, ".sarif")
+				default:
+					continue // skip tempfiles like *.sarif.tmp-*
+				}
+				if _, ok := seen[name]; ok {
+					continue
+				}
+				seen[name] = struct{}{}
+				fmt.Fprintln(cmd.OutOrStdout(), name)
 			}
 			return nil
 		},
@@ -178,17 +193,25 @@ func listLocalDir(dir string, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read dir %s: %w", dir, err)
 	}
-	any := false
+	seen := make(map[string]struct{})
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasSuffix(name, ".ndjson") {
+		switch {
+		case strings.HasSuffix(name, ".ndjson"):
+			name = strings.TrimSuffix(name, ".ndjson")
+		case strings.HasSuffix(name, ".sarif"):
+			name = strings.TrimSuffix(name, ".sarif")
+		default:
 			continue
 		}
-		fmt.Fprintln(w, strings.TrimSuffix(name, ".ndjson"))
-		any = true
+		seen[name] = struct{}{}
 	}
-	if !any {
+	if len(seen) == 0 {
 		fmt.Fprintln(w, "(no findings yet)")
+		return nil
+	}
+	for name := range seen {
+		fmt.Fprintln(w, name)
 	}
 	return nil
 }
