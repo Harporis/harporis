@@ -30,10 +30,20 @@ func newFindingsCmd() *cobra.Command {
 	return c
 }
 
-// supportedFormats is the closed set accepted by --format. NDJSON is
-// the on-disk source for everything except sarif (which has its own
-// .sarif file written by the writer); the others transform NDJSON.
-var supportedFormats = []string{"ndjson", "pretty", "sarif", "json", "csv", "md"}
+// supportedFormats is the closed set accepted by --format.
+//   - ndjson, pretty, json, csv, md: derived from <id>.ndjson on disk
+//   - sarif, html, xlsx, pdf:        read straight from the writer's
+//     <id>.<ext> file (writer's sink wrote them; CLI just streams)
+var supportedFormats = []string{"ndjson", "pretty", "sarif", "json", "csv", "md", "html", "xlsx", "pdf"}
+
+// formatToExt maps a --format value to the file extension the writer
+// uses. Empty string means "derive from ndjson on the CLI side".
+var formatToExt = map[string]string{
+	"sarif": ".sarif",
+	"html":  ".html",
+	"xlsx":  ".xlsx",
+	"pdf":   ".pdf",
+}
 
 func newFindingsShowCmd() *cobra.Command {
 	var outputDir string
@@ -42,15 +52,19 @@ func newFindingsShowCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "show <scan_id>",
 		Short: "print findings for a scan in the requested format",
-		Long: "Renders findings for a scan_id. The writer materializes NDJSON + " +
-			"SARIF files; --format controls how the CLI presents them.\n\n" +
+		Long: "Renders findings for a scan_id. The writer materializes one " +
+			"file per format (NDJSON+SARIF+HTML+XLSX+PDF by default); --format " +
+			"controls how the CLI surfaces them.\n\n" +
 			"Supported formats: " + strings.Join(supportedFormats, ", ") + ".\n" +
 			"  ndjson  one protojson-encoded Finding per line (default; jq-friendly)\n" +
 			"  pretty  tab-aligned table with decoded matched_secret\n" +
 			"  sarif   SARIF v2.1.0 report (cat of writer's <scan_id>.sarif)\n" +
 			"  json    pretty-printed JSON array (machine-readable, no streaming)\n" +
 			"  csv     CSV row per finding: severity,rule,path,line,secret\n" +
-			"  md      Markdown table (good for PR/issue comments)",
+			"  md      Markdown table (good for PR/issue comments)\n" +
+			"  html    self-contained browser report with sort + filter\n" +
+			"  xlsx    Excel workbook (audit/triage in spreadsheets)\n" +
+			"  pdf     printable A4 report (formal hand-off / compliance binder)",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanID := args[0]
@@ -68,8 +82,8 @@ func newFindingsShowCmd() *cobra.Command {
 			}
 
 			ext := ".ndjson"
-			if format == "sarif" {
-				ext = ".sarif"
+			if v, ok := formatToExt[format]; ok {
+				ext = v
 			}
 			body, err := readFindingsFile(scanID, ext, outputDir)
 			if err != nil {
@@ -77,12 +91,14 @@ func newFindingsShowCmd() *cobra.Command {
 			}
 
 			switch format {
-			case "ndjson", "sarif":
-				// Stream raw — these are already the requested format on disk.
+			case "ndjson", "sarif", "html", "xlsx", "pdf":
+				// Stream raw — writer already wrote this format to disk.
+				// xlsx/pdf are binary; stdout still works (`> file.pdf`).
 				if _, err := cmd.OutOrStdout().Write([]byte(body)); err != nil {
 					return err
 				}
-				if body != "" && !strings.HasSuffix(body, "\n") {
+				if (format == "ndjson" || format == "sarif" || format == "html") &&
+					body != "" && !strings.HasSuffix(body, "\n") {
 					fmt.Fprintln(cmd.OutOrStdout())
 				}
 				return nil
