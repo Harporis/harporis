@@ -83,6 +83,13 @@ func main() {
 		}
 		sinks = append(sinks, xs)
 	}
+	if cfg.PDFEnabled != nil && *cfg.PDFEnabled {
+		ps, err := sink.NewPDF(cfg.OutputDir)
+		if err != nil {
+			fatal("init pdf sink: %v", err)
+		}
+		sinks = append(sinks, ps)
+	}
 	if len(sinks) == 0 {
 		fatal("no sinks enabled — set ndjson_enabled or sarif_enabled to true")
 	}
