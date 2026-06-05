@@ -76,6 +76,13 @@ func main() {
 		}
 		sinks = append(sinks, hs)
 	}
+	if cfg.XLSXEnabled != nil && *cfg.XLSXEnabled {
+		xs, err := sink.NewXLSX(cfg.OutputDir)
+		if err != nil {
+			fatal("init xlsx sink: %v", err)
+		}
+		sinks = append(sinks, xs)
+	}
 	if len(sinks) == 0 {
 		fatal("no sinks enabled — set ndjson_enabled or sarif_enabled to true")
 	}
