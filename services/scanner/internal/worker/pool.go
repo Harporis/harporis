@@ -23,16 +23,34 @@ type Tracker interface {
 	FinalEmit(ctx context.Context, scanID string) error
 }
 
+// DetectorProvider returns the currently active detector. Indirection
+// here is what lets rules hot-reload work: in production this is the
+// reload watcher's Current() method; in tests it's a static closure.
+type DetectorProvider interface {
+	Current() *detect.Detector
+}
+
+// staticDetector wraps a single *Detector for callers that don't need
+// hot-reload (tests, one-shot scans).
+type staticDetector struct{ d *detect.Detector }
+
+func (s staticDetector) Current() *detect.Detector { return s.d }
+
+// Static returns a DetectorProvider over a single immutable detector.
+func Static(d *detect.Detector) DetectorProvider { return staticDetector{d: d} }
+
 // Handler is the per-chunk processing logic. One Handler is shared across
 // all worker goroutines (it carries only immutable dependencies).
 type Handler struct {
-	d   *detect.Detector
+	dp  DetectorProvider
 	pub Publisher
 	tr  Tracker
 }
 
-func NewHandler(d *detect.Detector, pub Publisher, tr Tracker) *Handler {
-	return &Handler{d: d, pub: pub, tr: tr}
+// NewHandler binds the handler to a DetectorProvider. Use worker.Static
+// for tests / non-reloading callers, or rules.Watcher in production.
+func NewHandler(dp DetectorProvider, pub Publisher, tr Tracker) *Handler {
+	return &Handler{dp: dp, pub: pub, tr: tr}
 }
 
 // Handle is what the consumer's ChunkHandler delegates to. Errors are
@@ -43,7 +61,7 @@ func NewHandler(d *detect.Detector, pub Publisher, tr Tracker) *Handler {
 // bumped the counter, so JetStream MsgId dedup on redelivery can safely
 // absorb the duplicates without losing the count.
 func (h *Handler) Handle(ctx context.Context, c *v1.GitRowChunk) error {
-	findings := h.d.ScanChunk(c)
+	findings := h.dp.Current().ScanChunk(c)
 	for _, f := range findings {
 		if err := h.pub.PublishFinding(ctx, f); err != nil {
 			return fmt.Errorf("publish finding %s: %w", f.FindingId, err)

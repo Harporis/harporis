@@ -1,0 +1,133 @@
+- id: aws-access-key-id
+  description: AWS Access Key ID (AKIA / ASIA)
+  severity: high
+  regex: '(?:^|[^A-Z0-9])((?:AKIA|ASIA)[A-Z0-9]{16})(?:[^A-Z0-9]|$)'
+  secret_group: 1
+  tags: [aws, cloud]
+  examples:
+    positive: ["AKIAIOSFODNN7EXAMPLE", "aws_access_key=AKIA1234567890ABCDEF"]
+    negative: ["AKIAIOSFO", "akiaiosfodnn7example"]
+
+- id: aws-secret-access-key
+  description: AWS Secret Access Key (40-char base64-ish with entropy filter)
+  severity: critical
+  regex: '(?i)(aws[_-]?secret[_-]?(?:access[_-]?)?key)\s*[:=]\s*[''"]?([A-Za-z0-9/+=]{40})[''"]?'
+  secret_group: 2
+  entropy:
+    min: 4.5
+    target_group: 2
+  tags: [aws, cloud]
+  examples:
+    positive: ["aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"]
+    negative: ["aws_secret_access_key=tooshort", "aws_secret_access_key=AAAAAAAAAAAAAAAAAAAA!!!!!AAAAAAAAAAAAAAA"]
+
+- id: gcp-api-key
+  description: Google Cloud API key (AIza...)
+  severity: high
+  regex: 'AIza[0-9A-Za-z_-]{35}'
+  tags: [gcp, cloud]
+  examples:
+    positive: ["AIzaSyB-1234567890abcdefghijklmnopqrstuvw"]
+    negative: ["AIza-short"]
+
+- id: gcp-service-account-private-key
+  description: GCP service account private key (PEM block in JSON)
+  severity: critical
+  regex: '"private_key":\s*"-----BEGIN PRIVATE KEY-----'
+  tags: [gcp, cloud]
+  examples:
+    positive: ['"private_key": "-----BEGIN PRIVATE KEY-----\nMIIE…"']
+    negative: ['"private_key_id": "abc123"']
+
+- id: stripe-live-secret-key
+  description: Stripe live secret key (sk_live_...)
+  severity: critical
+  regex: '\bsk_live_[A-Za-z0-9]{24,}\b'
+  tags: [stripe, payments]
+  examples:
+    positive: ["sk_live_51HabcdefghijklmnopqrstuvwxyzAB"]
+    negative: ["sk_test_51HabcdefghijklmnopqrstuvwxyzAB", "sk_live_short"]
+
+- id: stripe-test-secret-key
+  description: Stripe test secret key (sk_test_...)
+  severity: medium
+  regex: '\bsk_test_[A-Za-z0-9]{24,}\b'
+  tags: [stripe, payments]
+  examples:
+    positive: ["sk_test_51HabcdefghijklmnopqrstuvwxyzAB"]
+    negative: ["sk_test_short", "sk_live_51HabcdefghijklmnopqrstuvwxyzAB"]
+
+- id: slack-bot-token
+  description: Slack bot / user token (xoxb / xoxp / xoxa)
+  severity: high
+  regex: '\bxox[bpars]-[A-Za-z0-9-]{10,}\b'
+  tags: [slack]
+  examples:
+    positive: ["xoxb-1234567890-abcdefghijklmnop"]
+    negative: ["xoxb-short", "xox-1234567890-abcdef"]
+
+- id: slack-webhook-url
+  description: Slack incoming webhook URL
+  severity: high
+  regex: 'https://hooks\.slack\.com/services/T[A-Za-z0-9_]+/B[A-Za-z0-9_]+/[A-Za-z0-9]{20,}'
+  tags: [slack]
+  examples:
+    positive: ["https://hooks.slack.com/services/T01234567/B98765432/abcdefghijklmnopqrstuvwx"]
+    negative: ["https://hooks.slack.com/services/T01234567"]
+
+- id: github-pat-classic
+  description: GitHub classic personal access token (ghp_...)
+  severity: critical
+  regex: '\bghp_[A-Za-z0-9]{36}\b'
+  tags: [github]
+  examples:
+    positive: ["ghp_abcdefghijklmnopqrstuvwxyz0123456789"]
+    negative: ["ghp_short", "ghp_abcdefghijklmnopqrstuvwxyz012345678!"]
+
+- id: github-pat-fine-grained
+  description: GitHub fine-grained personal access token (github_pat_...)
+  severity: critical
+  regex: '\bgithub_pat_[A-Za-z0-9_]{82}\b'
+  tags: [github]
+  examples:
+    positive: ["github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"]
+    negative: ["github_pat_short"]
+
+- id: github-oauth-token
+  description: GitHub OAuth / installation / refresh / server tokens (gho/ghu/ghs/ghr)
+  severity: critical
+  regex: '\b(?:gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b'
+  tags: [github]
+  examples:
+    positive: ["gho_abcdefghijklmnopqrstuvwxyz0123456789", "ghs_abcdefghijklmnopqrstuvwxyz0123456789"]
+    negative: ["ghx_abcdefghijklmnopqrstuvwxyz0123456789", "gho_short"]
+
+- id: jwt
+  description: JSON Web Token (three base64url segments)
+  severity: medium
+  regex: '\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'
+  tags: [jwt]
+  examples:
+    positive: ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"]
+    negative: ["eyJ.eyJ", "eyJ"]
+
+- id: private-key-pem
+  description: Private key in PEM format (RSA / EC / OpenSSH / PGP / DSA / encrypted)
+  severity: critical
+  regex: '(?s)-----BEGIN (RSA |EC |OPENSSH |PGP |DSA |ENCRYPTED )?PRIVATE KEY-----'
+  tags: [pem, key]
+  examples:
+    positive: ["-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"]
+    negative: ["-----BEGIN PUBLIC KEY-----", "-----BEGIN CERTIFICATE-----"]
+
+- id: generic-high-entropy-secret
+  description: 'Generic high-entropy assignment: token/secret/api_key/password = <20+ char string> (entropy filter applied at detect-time, not validate-time)'
+  severity: low
+  regex: '(?i)(token|secret|api[_-]?key|password|passwd|pwd)\s*[:=]\s*[''"]?([A-Za-z0-9+/=_-]{20,})[''"]?'
+  secret_group: 2
+  entropy:
+    min: 4.0
+    target_group: 2
+  tags: [generic]
+  examples:
+    positive: ["api_key=3xq8Z1nQpvP7tk+aWoH4mc5XyL2jKBVe", "password: 'sP9a7nLpQ2v5Z3wXq8rE6T'"]

@@ -20,6 +20,7 @@ import (
 	"github.com/Harporis/harporis/services/scanner/internal/metrics"
 	scannernats "github.com/Harporis/harporis/services/scanner/internal/nats"
 	"github.com/Harporis/harporis/services/scanner/internal/rules"
+	"github.com/Harporis/harporis/services/scanner/internal/rulewatch"
 	"github.com/Harporis/harporis/services/scanner/internal/status"
 	"github.com/Harporis/harporis/services/scanner/internal/version"
 	"github.com/Harporis/harporis/services/scanner/internal/worker"
@@ -43,7 +44,10 @@ func main() {
 	}
 	setupLogger(cfg.LogLevel)
 
-	// Rules.
+	// Rules. cfg.RulesPath == "" means use the embedded pack (no
+	// hot-reload). When the path is set, we wire a rulewatch.Watcher
+	// that polls mtime every 5s and atomic-swaps the detector when
+	// the operator edits the YAML.
 	var ruleSet []rules.Rule
 	if cfg.RulesPath != "" {
 		ruleSet, err = rules.LoadFile(cfg.RulesPath)
@@ -89,9 +93,21 @@ func main() {
 		tracker.Run(rootCtx)
 	}()
 
-	// Detector + handler.
-	det := detect.NewDetector(ruleSet, version.String())
-	handler := worker.NewHandler(det, pub, tracker)
+	// Detector + handler. If cfg.RulesPath is set, wrap the detector
+	// in a rulewatch.Watcher so an edit to the YAML pack on disk is
+	// picked up by future scans without a scanner restart.
+	var dp worker.DetectorProvider
+	if cfg.RulesPath != "" {
+		w, err := rulewatch.NewWatcher(cfg.RulesPath, version.String())
+		if err != nil {
+			fatal("rules watcher: %v", err)
+		}
+		go w.Run(rootCtx, 5*time.Second)
+		dp = w
+	} else {
+		dp = worker.Static(detect.NewDetector(ruleSet, version.String()))
+	}
+	handler := worker.NewHandler(dp, pub, tracker)
 
 	// Consumer.
 	consumer, err := scannernats.NewChunksConsumer(cl.JS, scannernats.ConsumerOptions{

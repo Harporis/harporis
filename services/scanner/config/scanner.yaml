@@ -10,4 +10,4 @@ status_tick_ms: 5000
 publish_ack_wait_seconds: 5
 metrics_addr: :9101
 log_level: ${LOG_LEVEL:-info}
-rules_path: ""                   # empty = embedded default.yaml
+rules_path: "${HARPORIS_RULES_PATH:-}"   # empty = embedded default.yaml; set via compose to /etc/harporis/rules/default.yaml for hot-reload

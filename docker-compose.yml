@@ -115,6 +115,13 @@ services:
       NATS_URL: nats://nats:4222
       NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
       LOG_LEVEL: info
+      # External rules path the scanner watches for hot-reload. Operators
+      # edit ./services/scanner/rules/default.yaml on the host; the
+      # scanner picks up the change within ~5s without restart and
+      # applies it to subsequent scans.
+      HARPORIS_RULES_PATH: /etc/harporis/rules/default.yaml
+    volumes:
+      - "./services/scanner/rules:/etc/harporis/rules:ro"
     expose:
       - "9101"
     healthcheck:

@@ -55,7 +55,7 @@ func TestProcessChunk_EmitsFindingsAndIncrsCounter(t *testing.T) {
 	pub := &fakePublisher{}
 	tr := &fakeTracker{}
 
-	h := NewHandler(d, pub, tr)
+	h := NewHandler(Static(d), pub, tr)
 	c := &v1.GitRowChunk{
 		ScanId: "scan-1", ChunkId: "c-1", Kind: v1.ChunkKind_BLOB,
 		Rows: []*v1.GitRow{
@@ -81,7 +81,7 @@ func TestProcessChunk_TriggersFinalEmitOnIsLast(t *testing.T) {
 	pub := &fakePublisher{}
 	tr := &fakeTracker{}
 
-	h := NewHandler(d, pub, tr)
+	h := NewHandler(Static(d), pub, tr)
 	c := &v1.GitRowChunk{
 		ScanId: "scan-2", ChunkId: "c-last", Kind: v1.ChunkKind_BLOB,
 		IsLastInScan: true,
@@ -125,7 +125,7 @@ func TestHandle_IncrementsPerSuccessfulPublish(t *testing.T) {
 	d := detect.NewDetector([]rules.Rule{r}, "scanner/test")
 	pub := &partialPublisher{succeed: 2}
 	tr := &fakeTracker{}
-	h := NewHandler(d, pub, tr)
+	h := NewHandler(Static(d), pub, tr)
 
 	c := &v1.GitRowChunk{
 		ScanId: "scan-fail", ChunkId: "c-1", Kind: v1.ChunkKind_BLOB,
@@ -152,7 +152,7 @@ func TestHandle_DoesNotHang(t *testing.T) {
 	d := detect.NewDetector([]rules.Rule{r}, "scanner/test")
 	pub := &fakePublisher{}
 	tr := &fakeTracker{}
-	h := NewHandler(d, pub, tr)
+	h := NewHandler(Static(d), pub, tr)
 	c := &v1.GitRowChunk{ScanId: "s", ChunkId: "c", Rows: []*v1.GitRow{{LineNumber: 1, Content: []byte("a")}}}
 	done := make(chan error, 1)
 	go func() { done <- h.Handle(context.Background(), c) }()
