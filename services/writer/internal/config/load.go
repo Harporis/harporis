@@ -27,6 +27,9 @@ type Config struct {
 	// standard for code-scanning tools).
 	NDJSONEnabled *bool  `yaml:"ndjson_enabled"`
 	SARIFEnabled  *bool  `yaml:"sarif_enabled"`
+	HTMLEnabled   *bool  `yaml:"html_enabled"`
+	XLSXEnabled   *bool  `yaml:"xlsx_enabled"`
+	PDFEnabled    *bool  `yaml:"pdf_enabled"`
 	MetricsAddr   string `yaml:"metrics_addr"`
 	LogLevel      string `yaml:"log_level"`
 }
@@ -75,6 +78,18 @@ func applyDefaults(c *Config) {
 	if c.SARIFEnabled == nil {
 		v := true
 		c.SARIFEnabled = &v
+	}
+	if c.HTMLEnabled == nil {
+		v := true
+		c.HTMLEnabled = &v
+	}
+	if c.XLSXEnabled == nil {
+		v := true
+		c.XLSXEnabled = &v
+	}
+	if c.PDFEnabled == nil {
+		v := true
+		c.PDFEnabled = &v
 	}
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceWriter])

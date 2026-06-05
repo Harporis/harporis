@@ -69,6 +69,13 @@ func main() {
 		}
 		sinks = append(sinks, sa)
 	}
+	if cfg.HTMLEnabled != nil && *cfg.HTMLEnabled {
+		hs, err := sink.NewHTML(cfg.OutputDir)
+		if err != nil {
+			fatal("init html sink: %v", err)
+		}
+		sinks = append(sinks, hs)
+	}
 	if len(sinks) == 0 {
 		fatal("no sinks enabled — set ndjson_enabled or sarif_enabled to true")
 	}
