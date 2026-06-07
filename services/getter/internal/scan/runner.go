@@ -46,6 +46,17 @@ type Runner struct {
 	scanCtx *Context
 }
 
+// outputFormats returns the per-scan format subset (from
+// ScanRequest.output.formats) or nil if the caller didn't specify
+// any. Builder propagates the slice onto each emitted chunk so
+// scanner and writer can filter sinks downstream.
+func (r *Runner) outputFormats() []string {
+	if r.cfg.Output == nil {
+		return nil
+	}
+	return r.cfg.Output.Formats
+}
+
 func NewRunner(cfg RunnerConfig) *Runner {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 1
@@ -206,6 +217,7 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 		ScanID:             r.cfg.ScanID,
 		RowSizeTargetBytes: r.cfg.RowSizeTargetBytes,
 		OverlapLines:       r.cfg.OverlapLines,
+		OutputFormats:      r.outputFormats(),
 	})
 	shaBytes, err := hex.DecodeString(job.SHA)
 	if err != nil {

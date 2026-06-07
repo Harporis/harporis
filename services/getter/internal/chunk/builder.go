@@ -10,6 +10,10 @@ type BuilderConfig struct {
 	RowSizeTargetBytes int
 	OverlapLines       int
 	ScanID             string
+	// OutputFormats is the optional subset of writer output formats
+	// requested at scan submission (from ScanRequest.output.formats).
+	// Empty means writer's default — all enabled sinks fire.
+	OutputFormats []string
 }
 
 type Source struct {
@@ -98,6 +102,7 @@ func (b *Builder) emit(final bool) {
 		Rows:           rows,
 		StartLine:      rows[0].LineNumber,
 		EndLine:        rows[len(rows)-1].LineNumber,
+		OutputFormats:  b.cfg.OutputFormats,
 	}
 	switch b.src.Kind {
 	case v1.ChunkKind_BLOB:

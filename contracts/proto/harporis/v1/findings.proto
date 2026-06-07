@@ -43,4 +43,9 @@ message Finding {
 
   int64  detected_at_ms               = 30;
   string detector_version             = 31;
+
+  // Per-scan subset of writer output formats (copied from
+  // ScanRequest.output.formats through getter and scanner). Writer
+  // dispatches to matching sinks only; empty = all enabled sinks.
+  repeated string output_formats      = 40;
 }

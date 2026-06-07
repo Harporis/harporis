@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,11 +16,18 @@ import (
 	"github.com/Harporis/harporis/services/cli/internal/natscli"
 )
 
+// writerFormats is the set of output formats that ship as writer sinks
+// — what `harporis scan --format` is allowed to request. Distinct from
+// the read-side `findings show --format` set (which also includes
+// CLI-derived shapes like pretty/json/csv/md).
+var writerFormats = []string{"ndjson", "sarif", "html", "xlsx", "pdf"}
+
 func newScanCmd() *cobra.Command {
 	var (
 		scanID, scanType, local, remoteURL       string
 		token, sshKey, knownHosts                string
 		branch, baseBranch, commitFrom, commitTo string
+		formats                                  []string
 		noWait, noMountHost                      bool
 		idleTimeout                              time.Duration
 	)
@@ -49,6 +58,22 @@ func newScanCmd() *cobra.Command {
 				req.Range = &v1.ScanRange{
 					Branch: branch, BaseBranch: baseBranch,
 					CommitFrom: commitFrom, CommitTo: commitTo,
+				}
+			}
+			if len(formats) > 0 {
+				normalized := make([]string, 0, len(formats))
+				for _, f := range formats {
+					f = strings.ToLower(strings.TrimSpace(f))
+					if f == "" {
+						continue
+					}
+					if !slices.Contains(writerFormats, f) {
+						return fmt.Errorf("unknown --format %q (want one of: %s)", f, strings.Join(writerFormats, ", "))
+					}
+					normalized = append(normalized, f)
+				}
+				if len(normalized) > 0 {
+					req.Output = &v1.OutputConfig{Formats: normalized}
 				}
 			}
 
@@ -89,6 +114,7 @@ func newScanCmd() *cobra.Command {
 	c.Flags().StringVar(&commitTo, "to", "", "commit to (commit_range, inclusive)")
 	c.Flags().BoolVar(&noWait, "no-wait", false, "do not block on status events; submit and return")
 	c.Flags().DurationVar(&idleTimeout, "timeout", 30*time.Minute, "give up if no status events arrive for this long")
+	c.Flags().StringSliceVarP(&formats, "format", "f", nil, "writer output formats this scan should emit (comma-separated). Allowed: "+strings.Join(writerFormats, ", ")+". Empty = all writer-enabled sinks fire (default).")
 	return c
 }
 

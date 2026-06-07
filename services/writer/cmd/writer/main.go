@@ -126,11 +126,14 @@ func main() {
 			defer workerWG.Done()
 			h.SetWorkerStarted(true)
 			err := consumer.Run(rootCtx, func(ctx context.Context, f *v1.Finding) error {
-				// Fan-out to every enabled sink. Per-sink metrics fire
-				// independently; on any sink error we return so the
-				// message Naks and the operator gets a metric bump on
-				// the specific sink that failed.
+				// Fan-out to enabled sinks, optionally narrowed by
+				// f.OutputFormats — per-scan format selection set at
+				// scan submission (ScanRequest.output.formats). Empty
+				// list = write to every enabled sink (back-compat).
 				for _, out := range sinks {
+					if !sink.WantedByFinding(out, f.OutputFormats) {
+						continue
+					}
 					start := time.Now()
 					werr := out.Write(ctx, f)
 					metrics.FindingsWriteSeconds.WithLabelValues(out.Name()).Observe(time.Since(start).Seconds())

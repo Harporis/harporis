@@ -103,8 +103,12 @@ type Finding struct {
 	EntropyScore    float64                `protobuf:"fixed64,22,opt,name=entropy_score,json=entropyScore,proto3" json:"entropy_score,omitempty"`
 	DetectedAtMs    int64                  `protobuf:"varint,30,opt,name=detected_at_ms,json=detectedAtMs,proto3" json:"detected_at_ms,omitempty"`
 	DetectorVersion string                 `protobuf:"bytes,31,opt,name=detector_version,json=detectorVersion,proto3" json:"detector_version,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Per-scan subset of writer output formats (copied from
+	// ScanRequest.output.formats through getter and scanner). Writer
+	// dispatches to matching sinks only; empty = all enabled sinks.
+	OutputFormats []string `protobuf:"bytes,40,rep,name=output_formats,json=outputFormats,proto3" json:"output_formats,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Finding) Reset() {
@@ -249,11 +253,18 @@ func (x *Finding) GetDetectorVersion() string {
 	return ""
 }
 
+func (x *Finding) GetOutputFormats() []string {
+	if x != nil {
+		return x.OutputFormats
+	}
+	return nil
+}
+
 var File_harporis_v1_findings_proto protoreflect.FileDescriptor
 
 const file_harporis_v1_findings_proto_rawDesc = "" +
 	"\n" +
-	"\x1aharporis/v1/findings.proto\x12\vharporis.v1\x1a\x17harporis/v1/types.proto\"\xbe\x04\n" +
+	"\x1aharporis/v1/findings.proto\x12\vharporis.v1\x1a\x17harporis/v1/types.proto\"\xe5\x04\n" +
 	"\aFinding\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12\x1d\n" +
 	"\n" +
@@ -275,7 +286,8 @@ const file_harporis_v1_findings_proto_rawDesc = "" +
 	"\fmatched_line\x18\x15 \x01(\fR\vmatchedLine\x12#\n" +
 	"\rentropy_score\x18\x16 \x01(\x01R\fentropyScore\x12$\n" +
 	"\x0edetected_at_ms\x18\x1e \x01(\x03R\fdetectedAtMs\x12)\n" +
-	"\x10detector_version\x18\x1f \x01(\tR\x0fdetectorVersion*Q\n" +
+	"\x10detector_version\x18\x1f \x01(\tR\x0fdetectorVersion\x12%\n" +
+	"\x0eoutput_formats\x18( \x03(\tR\routputFormats*Q\n" +
 	"\bSeverity\x12\x18\n" +
 	"\x14SEVERITY_UNSPECIFIED\x10\x00\x12\a\n" +
 	"\x03LOW\x10\x01\x12\n" +

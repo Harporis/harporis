@@ -101,6 +101,7 @@ func (d *Detector) ScanChunk(c *v1.GitRowChunk) []*v1.Finding {
 				EntropyScore:    entropy,
 				DetectedAtMs:    d.now().UnixMilli(),
 				DetectorVersion: d.detectorVersion,
+				OutputFormats:   c.OutputFormats,
 			}
 			switch c.Kind {
 			case v1.ChunkKind_DIFF_WINDOW:
