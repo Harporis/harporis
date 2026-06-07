@@ -30,11 +30,16 @@ const HTMLDefaultMaxPerScan = 10_000
 type HTML struct {
 	rootDir    string
 	maxPerScan int
+	maskSecret bool
 
 	mu     sync.Mutex
 	closed bool
 	scans  map[string][]*v1.Finding
 }
+
+// SetMaskSecrets toggles secret-masking in rendered cards. Off by
+// default — operators reviewing locally usually want the full secret.
+func (h *HTML) SetMaskSecrets(on bool) { h.maskSecret = on }
 
 func NewHTML(rootDir string) (*HTML, error) {
 	return NewHTMLN(rootDir, HTMLDefaultMaxPerScan)
@@ -142,12 +147,16 @@ func (h *HTML) flush(scanID string, findings []*v1.Finding) error {
 				ln++
 			}
 		}
+		secret := string(f.MatchedSecret)
+		if h.maskSecret {
+			secret = maskSecret(secret)
+		}
 		rows = append(rows, row{
 			Severity: f.Severity.String(),
 			RuleID:   f.RuleId,
 			Path:     p,
 			Line:     f.LineNumber,
-			Secret:   string(f.MatchedSecret),
+			Secret:   secret,
 			Context:  ctx,
 		})
 		counts[f.Severity.String()]++

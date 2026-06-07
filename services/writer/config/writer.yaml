@@ -4,6 +4,8 @@
 # docker-compose `environment:` block applies to all services.
 nats_url: "${NATS_URL:-nats://nats:4222}"
 nats_token: "${NATS_TOKEN:-}" # empty = no auth (dev compose injects "harporis-dev")
+nats_creds_file: "${NATS_CREDS_FILE:-}" # path to JWT/nkey creds (prod alternative to token)
+nats_root_cas: "${NATS_ROOT_CAS:-}"     # path to PEM bundle for TLS (prod)
 workers: 0                   # 0 = runtime.NumCPU()
 fetch_batch: 16
 fetch_max_wait_ms: 5000
@@ -13,5 +15,6 @@ max_ack_pending: 64
 output_dir: "${HARPORIS_OUTPUT_DIR:-/var/lib/harporis/findings}"
 ndjson_enabled: true        # one .ndjson per scan_id (streaming-friendly, jq input)
 sarif_enabled: true         # one .sarif per scan_id (SARIF v2.1.0, IDE/SCM integrations)
+mask_secrets: false         # when true, HTML+PDF render secret[:4] + "***" (NDJSON/SARIF/XLSX always carry raw secrets)
 metrics_addr: ":9102"
 log_level: "${LOG_LEVEL:-info}"

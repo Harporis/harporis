@@ -88,6 +88,8 @@ filters:
 nats:
   url: ${NATS_URL:-nats://localhost:4222}
   token: ${NATS_TOKEN:-}        # empty = no auth (dev compose injects "harporis-dev")
+  creds_file: ${NATS_CREDS_FILE:-} # path to JWT/nkey creds (prod alternative to token)
+  root_cas: ${NATS_ROOT_CAS:-}     # path to PEM bundle for TLS (prod)
   jetstream:
     requests_stream: HARPORIS_REQUESTS
     chunks_stream:   HARPORIS_CHUNKS

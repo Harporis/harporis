@@ -17,9 +17,11 @@ var (
 	FindingsWriteSeconds   *prometheus.HistogramVec // labels: sink
 	SinkWrites             *prometheus.CounterVec   // labels: sink, severity
 	SinkErrors             *prometheus.CounterVec   // labels: sink, reason
+	SinkFormatIgnored      *prometheus.CounterVec   // labels: requested_format
 	NATSDeliveryErrors     *prometheus.CounterVec   // labels: kind
 	ActiveScans            prometheus.Gauge
 	BuildInfo              *prometheus.GaugeVec // labels: version, commit, proto_version
+	OrphanTempfilesSwept   prometheus.Counter
 
 	registry *prometheus.Registry
 )
@@ -32,12 +34,20 @@ func Init() {
 		FindingsWriteSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "writer_findings_write_seconds", Buckets: prometheus.DefBuckets}, []string{"sink"})
 		SinkWrites = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "writer_sink_writes_total"}, []string{"sink", "severity"})
 		SinkErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "writer_sink_errors_total"}, []string{"sink", "reason"})
+		SinkFormatIgnored = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "writer_sink_format_ignored_total",
+			Help: "Findings whose per-scan -f named a format that has no enabled sink (e.g. `-f pdf` while pdf_enabled=false).",
+		}, []string{"requested_format"})
 		NATSDeliveryErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "writer_nats_delivery_errors_total"}, []string{"kind"})
 		ActiveScans = prometheus.NewGauge(prometheus.GaugeOpts{Name: "writer_active_scans"})
 		BuildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "writer_build_info"}, []string{"version", "commit", "proto_version"})
+		OrphanTempfilesSwept = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "writer_orphan_tempfiles_swept_total",
+			Help: "Stale .<scan_id>.<hex>.{xlsx,pdf,sarif,html} files cleaned up on writer startup (left behind by a crash mid-flush).",
+		})
 		for _, c := range []prometheus.Collector{
-			FindingsConsumed, FindingsWriteSeconds, SinkWrites, SinkErrors,
-			NATSDeliveryErrors, ActiveScans, BuildInfo,
+			FindingsConsumed, FindingsWriteSeconds, SinkWrites, SinkErrors, SinkFormatIgnored,
+			NATSDeliveryErrors, ActiveScans, BuildInfo, OrphanTempfilesSwept,
 		} {
 			registry.MustRegister(c)
 		}
@@ -48,6 +58,7 @@ func Init() {
 		FindingsWriteSeconds.WithLabelValues("")
 		SinkWrites.WithLabelValues("", "")
 		SinkErrors.WithLabelValues("", "")
+		SinkFormatIgnored.WithLabelValues("")
 		NATSDeliveryErrors.WithLabelValues("")
 	})
 }

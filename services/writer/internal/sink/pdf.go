@@ -33,11 +33,16 @@ const PDFDefaultMaxPerScan = 10_000
 type PDF struct {
 	rootDir    string
 	maxPerScan int
+	maskSecret bool
 
 	mu     sync.Mutex
 	closed bool
 	scans  map[string][]*v1.Finding
 }
+
+// SetMaskSecrets toggles secret-masking in rendered cards. Off by
+// default; mirrors HTML sink semantics.
+func (p *PDF) SetMaskSecrets(on bool) { p.maskSecret = on }
 
 func NewPDF(rootDir string) (*PDF, error) {
 	return NewPDFN(rootDir, PDFDefaultMaxPerScan)
@@ -191,32 +196,44 @@ func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
 		return fmt.Errorf("sink: load gobold: %w", err)
 	}
 
-	pdf.AddPage()
 	const (
 		marginX   = 40.0
-		bottomCut = 770.0
+		topY      = 40.0
+		bottomCut = 760.0
 		pageW     = 595.0
 		rowH      = 60.0
 	)
 	contentW := pageW - 2*marginX
 
-	// Title.
+	// Page header is drawn at the top of every page; we know the total
+	// page count only at the end, so capture each page's findings-list
+	// start position and stamp footers in a second pass.
+	addPage := func() {
+		pdf.AddPage()
+		_ = pdf.SetFont("gobold", "", 9)
+		pdf.SetTextColor(80, 80, 80)
+		pdf.SetXY(marginX, 16)
+		_ = pdf.Cell(nil, "Harporis findings — "+scanID)
+	}
+
+	addPage()
+
+	// Cover-page title + per-severity counts (only on first page).
 	_ = pdf.SetFont("gobold", "", 16)
 	pdf.SetTextColor(20, 20, 20)
-	pdf.SetXY(marginX, 40)
+	pdf.SetXY(marginX, topY)
 	_ = pdf.Cell(nil, "Harporis findings — "+scanID)
 
 	_ = pdf.SetFont("goregular", "", 10)
 	pdf.SetTextColor(100, 100, 100)
-	pdf.SetXY(marginX, 64)
+	pdf.SetXY(marginX, topY+24)
 	_ = pdf.Cell(nil, fmt.Sprintf("%d finding(s) in this scan", len(findings)))
 
-	// Per-severity counts under the subtitle.
 	counts := map[string]int{}
 	for _, f := range findings {
 		counts[f.Severity.String()]++
 	}
-	pdf.SetXY(marginX, 84)
+	pdf.SetXY(marginX, topY+44)
 	parts := []string{}
 	for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
 		if counts[sev] > 0 {
@@ -229,7 +246,7 @@ func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
 
 	// Findings list. Card height grows with the number of context lines
 	// the scanner harvested (rowH = base; +ctxLineH per context line).
-	y := 110.0
+	y := topY + 70
 	const ctxLineH = 10.0
 	for _, f := range findings {
 		ctxCount := len(f.ContextBefore) + len(f.ContextAfter)
@@ -238,8 +255,8 @@ func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
 			cardH += float64(ctxCount)*ctxLineH + 8
 		}
 		if y+cardH > bottomCut {
-			pdf.AddPage()
-			y = 40
+			addPage()
+			y = topY
 		}
 		r, g, b := severityRGB(f.Severity.String())
 		pdf.SetFillColor(r, g, b)
@@ -269,6 +286,9 @@ func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
 		_ = pdf.Cell(nil, loc)
 
 		secret := string(f.MatchedSecret)
+		if p.maskSecret {
+			secret = maskSecret(secret)
+		}
 		if len(secret) > 90 {
 			secret = secret[:90] + "…"
 		}
@@ -282,6 +302,17 @@ func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
 		}
 
 		y += cardH + 6
+	}
+
+	// Stamp Page N/M footers now that we know the total page count.
+	// gopdf has SetPage(); iterate every page and draw the footer line.
+	total := pdf.GetNumberOfPages()
+	for p := 1; p <= total; p++ {
+		pdf.SetPage(p)
+		_ = pdf.SetFont("goregular", "", 8)
+		pdf.SetTextColor(140, 140, 140)
+		pdf.SetXY(marginX, 800)
+		_ = pdf.Cell(nil, fmt.Sprintf("Page %d / %d", p, total))
 	}
 
 	// Atomic write via random-suffix tempfile + rename.

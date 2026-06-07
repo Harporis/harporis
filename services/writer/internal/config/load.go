@@ -15,6 +15,8 @@ import (
 type Config struct {
 	NATSURL        string `yaml:"nats_url"`
 	NATSToken      string `yaml:"nats_token"`
+	NATSCredsFile  string `yaml:"nats_creds_file"` // JWT/nkey creds for prod
+	NATSRootCAs    string `yaml:"nats_root_cas"`   // PEM bundle for TLS
 	Workers        int    `yaml:"workers"`
 	FetchBatch     int    `yaml:"fetch_batch"`
 	FetchMaxWaitMs int    `yaml:"fetch_max_wait_ms"`
@@ -30,6 +32,12 @@ type Config struct {
 	HTMLEnabled   *bool  `yaml:"html_enabled"`
 	XLSXEnabled   *bool  `yaml:"xlsx_enabled"`
 	PDFEnabled    *bool  `yaml:"pdf_enabled"`
+	// MaskSecrets, when true, renders matched_secret as first-4 chars +
+	// "***" in human-facing sinks (HTML + PDF). NDJSON/SARIF/XLSX still
+	// carry the raw secret because their primary use cases (jq
+	// pipelines, code-scanning ingestion, spreadsheet triage) need it.
+	// Default: false (don't break existing operator expectations).
+	MaskSecrets *bool `yaml:"mask_secrets"`
 	MetricsAddr   string `yaml:"metrics_addr"`
 	LogLevel      string `yaml:"log_level"`
 }
@@ -90,6 +98,10 @@ func applyDefaults(c *Config) {
 	if c.PDFEnabled == nil {
 		v := true
 		c.PDFEnabled = &v
+	}
+	if c.MaskSecrets == nil {
+		v := false
+		c.MaskSecrets = &v
 	}
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceWriter])

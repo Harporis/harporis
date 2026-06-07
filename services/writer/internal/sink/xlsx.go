@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -57,6 +58,71 @@ func NewXLSXN(rootDir string, maxPerScan int) (*XLSX, error) {
 }
 
 func (x *XLSX) Name() string { return "xlsx_file" }
+
+// writeXLSXSummary populates the Summary sheet with per-severity totals
+// + a per-rule breakdown. Layout: two stacked tables separated by a
+// blank row so a copy-paste into a doc carries the structure.
+func writeXLSXSummary(f *xlsxlib.File, findings []*v1.Finding, headerStyle int) error {
+	const sheet = "Summary"
+
+	// Per-severity totals.
+	sevCounts := map[string]int{}
+	for _, fnd := range findings {
+		sevCounts[fnd.Severity.String()]++
+	}
+	_ = f.SetCellValue(sheet, "A1", "severity")
+	_ = f.SetCellValue(sheet, "B1", "count")
+	_ = f.SetCellStyle(sheet, "A1", "B1", headerStyle)
+	row := 2
+	for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "SEVERITY_UNSPECIFIED"} {
+		if sevCounts[sev] == 0 {
+			continue
+		}
+		_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", row), sev)
+		_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", row), sevCounts[sev])
+		row++
+	}
+	// Total row (bold via header style).
+	_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", row), "TOTAL")
+	_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", row), len(findings))
+	_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", row), fmt.Sprintf("B%d", row), headerStyle)
+	row += 2
+
+	// Per-rule breakdown.
+	type ruleCount struct {
+		rule string
+		n    int
+	}
+	ruleMap := map[string]int{}
+	for _, fnd := range findings {
+		ruleMap[fnd.RuleId]++
+	}
+	ranked := make([]ruleCount, 0, len(ruleMap))
+	for k, v := range ruleMap {
+		ranked = append(ranked, ruleCount{k, v})
+	}
+	// Highest count first; ties broken alphabetically for deterministic output.
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].n != ranked[j].n {
+			return ranked[i].n > ranked[j].n
+		}
+		return ranked[i].rule < ranked[j].rule
+	})
+
+	_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", row), "rule_id")
+	_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", row), "count")
+	_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", row), fmt.Sprintf("B%d", row), headerStyle)
+	row++
+	for _, rc := range ranked {
+		_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", row), rc.rule)
+		_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", row), rc.n)
+		row++
+	}
+
+	_ = f.SetColWidth(sheet, "A", "A", 28)
+	_ = f.SetColWidth(sheet, "B", "B", 10)
+	return nil
+}
 
 // joinBytesLines glues a slice of raw line bytes with literal newlines
 // for embedding into a single XLSX cell. Returns "" when the slice is
@@ -121,8 +187,14 @@ func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {
 	if _, err := f.NewSheet(sheet); err != nil {
 		return fmt.Errorf("sink: new sheet: %w", err)
 	}
+	if _, err := f.NewSheet("Summary"); err != nil {
+		return fmt.Errorf("sink: new summary sheet: %w", err)
+	}
 	_ = f.DeleteSheet("Sheet1")
-	f.SetActiveSheet(0)
+	// Findings is the primary sheet — open the workbook on it.
+	if idx, err := f.GetSheetIndex(sheet); err == nil {
+		f.SetActiveSheet(idx)
+	}
 
 	// Header row: bold, frozen.
 	headers := []string{"severity", "rule_id", "file_path", "line", "secret", "finding_id", "ctx_before", "ctx_after"}
@@ -188,6 +260,10 @@ func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {
 	_ = f.SetColWidth(sheet, "E", "E", 60)
 	_ = f.SetColWidth(sheet, "F", "F", 38)
 	_ = f.SetColWidth(sheet, "G", "H", 60)
+
+	if err := writeXLSXSummary(f, findings, headerStyle); err != nil {
+		return fmt.Errorf("sink: write summary: %w", err)
+	}
 
 	// excelize requires the file path to end in .xlsx (it detects the
 	// format from extension). os.CreateTemp gives random-suffix-after-

@@ -16,6 +16,8 @@ import (
 type Config struct {
 	NATSURL               string `yaml:"nats_url"`
 	NATSToken             string `yaml:"nats_token"`
+	NATSCredsFile         string `yaml:"nats_creds_file"` // JWT/nkey creds for prod
+	NATSRootCAs           string `yaml:"nats_root_cas"`   // PEM bundle for TLS
 	Workers               int    `yaml:"workers"`
 	FetchBatch            int    `yaml:"fetch_batch"`
 	FetchMaxWaitMs        int    `yaml:"fetch_max_wait_ms"`

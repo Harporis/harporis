@@ -74,6 +74,9 @@ func main() {
 		if err != nil {
 			fatal("init html sink: %v", err)
 		}
+		if cfg.MaskSecrets != nil && *cfg.MaskSecrets {
+			hs.SetMaskSecrets(true)
+		}
 		sinks = append(sinks, hs)
 	}
 	if cfg.XLSXEnabled != nil && *cfg.XLSXEnabled {
@@ -88,14 +91,39 @@ func main() {
 		if err != nil {
 			fatal("init pdf sink: %v", err)
 		}
+		if cfg.MaskSecrets != nil && *cfg.MaskSecrets {
+			ps.SetMaskSecrets(true)
+		}
 		sinks = append(sinks, ps)
 	}
 	if len(sinks) == 0 {
 		fatal("no sinks enabled — set ndjson_enabled or sarif_enabled to true")
 	}
 
+	// Sweep orphaned tempfiles from prior crashes mid-flush. The
+	// accumulator sinks (SARIF/HTML/XLSX/PDF) write to a tempfile then
+	// rename; a kill -9 between those steps leaves the tempfile behind.
+	// Doing this once at startup keeps the output dir tidy without
+	// pulling in a periodic janitor goroutine.
+	swept, swErr := sink.SweepOrphanTempfiles(cfg.OutputDir, func(p string, err error) {
+		slog.Warn("orphan tempfile sweep", "path", p, "err", err)
+	})
+	if swErr != nil {
+		slog.Warn("orphan tempfile sweep returned error (continuing)", "err", swErr)
+	}
+	if swept > 0 {
+		slog.Info("orphan tempfiles swept", "count", swept, "dir", cfg.OutputDir)
+		metrics.OrphanTempfilesSwept.Add(float64(swept))
+	}
+
 	// NATS.
-	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATSURL, Token: cfg.NATSToken, ClientName: "harporis-writer"})
+	cl, err := wire.Dial(wire.DialConfig{
+		URL:        cfg.NATSURL,
+		Token:      cfg.NATSToken,
+		CredsFile:  cfg.NATSCredsFile,
+		RootCAs:    cfg.NATSRootCAs,
+		ClientName: "harporis-writer",
+	})
 	if err != nil {
 		fatal("nats dial: %v", err)
 	}
@@ -130,10 +158,12 @@ func main() {
 				// f.OutputFormats — per-scan format selection set at
 				// scan submission (ScanRequest.output.formats). Empty
 				// list = write to every enabled sink (back-compat).
+				wrote := 0
 				for _, out := range sinks {
 					if !sink.WantedByFinding(out, f.OutputFormats) {
 						continue
 					}
+					wrote++
 					start := time.Now()
 					werr := out.Write(ctx, f)
 					metrics.FindingsWriteSeconds.WithLabelValues(out.Name()).Observe(time.Since(start).Seconds())
@@ -142,6 +172,15 @@ func main() {
 						return werr
 					}
 					metrics.SinkWrites.WithLabelValues(out.Name(), f.Severity.String()).Inc()
+				}
+				// Per-scan request asked for at least one format but no
+				// enabled sink matched any of them (e.g. `-f pdf` while
+				// pdf_enabled=false). Surface as a metric so operators
+				// can see silent drops.
+				if wrote == 0 && len(f.OutputFormats) > 0 {
+					for _, req := range f.OutputFormats {
+						metrics.SinkFormatIgnored.WithLabelValues(req).Inc()
+					}
 				}
 				return nil
 			})
