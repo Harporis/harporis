@@ -189,6 +189,71 @@ func TestScanChunk_MatchedSecretDefaultsToFullMatch(t *testing.T) {
 	}
 }
 
+func TestScanChunk_ContextLines_WindowAndEdgeClamp(t *testing.T) {
+	d := NewDetector([]rules.Rule{ruleAKIA()}, "scanner/test")
+	// Match on row 3 (0-indexed 2). With N=2 we expect rows 1..2 before
+	// and rows 4..5 after.
+	c := chunkWithLines(
+		"line1",
+		"line2",
+		"aws_key = AKIAIOSFODNN7EXAMPLE",
+		"line4",
+		"line5",
+		"line6",
+	)
+	c.OutputContextLines = 2
+	got := d.ScanChunk(c)
+	if len(got) != 1 {
+		t.Fatalf("want 1 finding, got %d", len(got))
+	}
+	f := got[0]
+	if want := []string{"line1", "line2"}; !bytesEq(f.ContextBefore, want) {
+		t.Fatalf("ContextBefore = %v, want %v", asStrings(f.ContextBefore), want)
+	}
+	if want := []string{"line4", "line5"}; !bytesEq(f.ContextAfter, want) {
+		t.Fatalf("ContextAfter = %v, want %v", asStrings(f.ContextAfter), want)
+	}
+
+	// Edge clamp: match on FIRST row with N=3 → ContextBefore empty, ContextAfter still up to 3.
+	cFirst := chunkWithLines("aws_key = AKIAIOSFODNN7EXAMPLE", "a", "b")
+	cFirst.OutputContextLines = 3
+	got = d.ScanChunk(cFirst)
+	if len(got[0].ContextBefore) != 0 {
+		t.Fatalf("ContextBefore on edge match must be empty, got %v", asStrings(got[0].ContextBefore))
+	}
+	if want := []string{"a", "b"}; !bytesEq(got[0].ContextAfter, want) {
+		t.Fatalf("ContextAfter on edge = %v, want %v", asStrings(got[0].ContextAfter), want)
+	}
+
+	// N=0 (default) → no context.
+	cNone := chunkWithLines("x", "AKIAIOSFODNN7EXAMPLE", "y")
+	got = d.ScanChunk(cNone)
+	if got[0].ContextBefore != nil || got[0].ContextAfter != nil {
+		t.Fatalf("N=0 must produce nil arrays, got before=%v after=%v",
+			asStrings(got[0].ContextBefore), asStrings(got[0].ContextAfter))
+	}
+}
+
+func bytesEq(got [][]byte, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if string(got[i]) != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func asStrings(b [][]byte) []string {
+	out := make([]string, len(b))
+	for i := range b {
+		out[i] = string(b[i])
+	}
+	return out
+}
+
 func TestScanChunk_NoMatchesReturnsEmpty(t *testing.T) {
 	d := NewDetector([]rules.Rule{ruleAKIA()}, "scanner/test")
 	c := chunkWithLines("nothing", "interesting", "here")

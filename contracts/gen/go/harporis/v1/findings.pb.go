@@ -107,6 +107,17 @@ type Finding struct {
 	// ScanRequest.output.formats through getter and scanner). Writer
 	// dispatches to matching sinks only; empty = all enabled sinks.
 	OutputFormats []string `protobuf:"bytes,40,rep,name=output_formats,json=outputFormats,proto3" json:"output_formats,omitempty"`
+	// Surrounding-context lines harvested by the scanner for triage.
+	// Each element is one raw line (without trailing \n) in source order:
+	// context_before[0] is the OLDEST line (lowest line number); the LAST
+	// entry of context_before is the line immediately before line_number.
+	// context_after[0] is the line immediately after line_number_end; the
+	// LAST entry is the FARTHEST line included.
+	// Both arrays are bounded by chunk edges, so the requested N may be
+	// truncated at the start/end of a file.
+	// Empty when OutputConfig.context_lines is 0 (the default).
+	ContextBefore [][]byte `protobuf:"bytes,41,rep,name=context_before,json=contextBefore,proto3" json:"context_before,omitempty"`
+	ContextAfter  [][]byte `protobuf:"bytes,42,rep,name=context_after,json=contextAfter,proto3" json:"context_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -260,11 +271,25 @@ func (x *Finding) GetOutputFormats() []string {
 	return nil
 }
 
+func (x *Finding) GetContextBefore() [][]byte {
+	if x != nil {
+		return x.ContextBefore
+	}
+	return nil
+}
+
+func (x *Finding) GetContextAfter() [][]byte {
+	if x != nil {
+		return x.ContextAfter
+	}
+	return nil
+}
+
 var File_harporis_v1_findings_proto protoreflect.FileDescriptor
 
 const file_harporis_v1_findings_proto_rawDesc = "" +
 	"\n" +
-	"\x1aharporis/v1/findings.proto\x12\vharporis.v1\x1a\x17harporis/v1/types.proto\"\xe5\x04\n" +
+	"\x1aharporis/v1/findings.proto\x12\vharporis.v1\x1a\x17harporis/v1/types.proto\"\xb1\x05\n" +
 	"\aFinding\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12\x1d\n" +
 	"\n" +
@@ -287,7 +312,9 @@ const file_harporis_v1_findings_proto_rawDesc = "" +
 	"\rentropy_score\x18\x16 \x01(\x01R\fentropyScore\x12$\n" +
 	"\x0edetected_at_ms\x18\x1e \x01(\x03R\fdetectedAtMs\x12)\n" +
 	"\x10detector_version\x18\x1f \x01(\tR\x0fdetectorVersion\x12%\n" +
-	"\x0eoutput_formats\x18( \x03(\tR\routputFormats*Q\n" +
+	"\x0eoutput_formats\x18( \x03(\tR\routputFormats\x12%\n" +
+	"\x0econtext_before\x18) \x03(\fR\rcontextBefore\x12#\n" +
+	"\rcontext_after\x18* \x03(\fR\fcontextAfter*Q\n" +
 	"\bSeverity\x12\x18\n" +
 	"\x14SEVERITY_UNSPECIFIED\x10\x00\x12\a\n" +
 	"\x03LOW\x10\x01\x12\n" +

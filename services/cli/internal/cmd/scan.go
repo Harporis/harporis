@@ -22,12 +22,19 @@ import (
 // CLI-derived shapes like pretty/json/csv/md).
 var writerFormats = []string{"ndjson", "sarif", "html", "xlsx", "pdf"}
 
+// maxContextLines caps `--context` client-side so an operator typo
+// (e.g. 100000) gets a friendly error instead of silently shipping a
+// pathological scan request. Server-side getter applies its own clamp
+// (kept identical so the two stay in sync).
+const maxContextLines = 100
+
 func newScanCmd() *cobra.Command {
 	var (
 		scanID, scanType, local, remoteURL       string
 		token, sshKey, knownHosts                string
 		branch, baseBranch, commitFrom, commitTo string
 		formats                                  []string
+		contextLines                             int32
 		noWait, noMountHost                      bool
 		idleTimeout                              time.Duration
 	)
@@ -60,7 +67,13 @@ func newScanCmd() *cobra.Command {
 					CommitFrom: commitFrom, CommitTo: commitTo,
 				}
 			}
-			if len(formats) > 0 {
+			if contextLines < 0 {
+				return fmt.Errorf("--context must be >= 0 (got %d)", contextLines)
+			}
+			if contextLines > maxContextLines {
+				return fmt.Errorf("--context %d exceeds cap %d", contextLines, maxContextLines)
+			}
+			if len(formats) > 0 || contextLines > 0 {
 				normalized := make([]string, 0, len(formats))
 				for _, f := range formats {
 					f = strings.ToLower(strings.TrimSpace(f))
@@ -72,8 +85,12 @@ func newScanCmd() *cobra.Command {
 					}
 					normalized = append(normalized, f)
 				}
+				req.Output = &v1.OutputConfig{}
 				if len(normalized) > 0 {
-					req.Output = &v1.OutputConfig{Formats: normalized}
+					req.Output.Formats = normalized
+				}
+				if contextLines > 0 {
+					req.Output.ContextLines = contextLines
 				}
 			}
 
@@ -115,6 +132,7 @@ func newScanCmd() *cobra.Command {
 	c.Flags().BoolVar(&noWait, "no-wait", false, "do not block on status events; submit and return")
 	c.Flags().DurationVar(&idleTimeout, "timeout", 30*time.Minute, "give up if no status events arrive for this long")
 	c.Flags().StringSliceVarP(&formats, "format", "f", nil, "writer output formats this scan should emit (comma-separated). Allowed: "+strings.Join(writerFormats, ", ")+". Empty = all writer-enabled sinks fire (default).")
+	c.Flags().Int32Var(&contextLines, "context", 0, fmt.Sprintf("number of lines BEFORE and AFTER each finding to include in the report (0 = no context, capped at %d). Visible in NDJSON/SARIF/HTML/XLSX/PDF.", maxContextLines))
 	return c
 }
 

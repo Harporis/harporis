@@ -117,6 +117,49 @@ func pdfStripControl(s string) string {
 	return b.String()
 }
 
+// renderPDFContext draws the harvested context_before + matched_line
+// + context_after as a monospaced block under a finding card. Line
+// numbers are prefixed in grey; the matched line is rendered in the
+// darker body colour to set it apart from surrounding rows. Long
+// lines are clipped to keep cards from spilling past the right margin.
+func renderPDFContext(pdf *gopdf.GoPdf, x, y float64, f *v1.Finding) {
+	_ = pdf.SetFont("goregular", "", 8)
+	const lineH = 10.0
+	const maxChars = 100
+	startLine := f.LineNumber - int32(len(f.ContextBefore))
+	if startLine < 1 {
+		startLine = 1
+	}
+	cy := y
+	ln := startLine
+	for _, b := range f.ContextBefore {
+		pdf.SetTextColor(140, 140, 140)
+		pdf.SetXY(x, cy)
+		_ = pdf.Cell(nil, fmt.Sprintf("%4d  %s", ln, clipPDFLine(string(b), maxChars)))
+		cy += lineH
+		ln++
+	}
+	next := f.LineNumberEnd + 1
+	if next <= 0 {
+		next = f.LineNumber + 1
+	}
+	for _, a := range f.ContextAfter {
+		pdf.SetTextColor(140, 140, 140)
+		pdf.SetXY(x, cy)
+		_ = pdf.Cell(nil, fmt.Sprintf("%4d  %s", next, clipPDFLine(string(a), maxChars)))
+		cy += lineH
+		next++
+	}
+}
+
+func clipPDFLine(s string, max int) string {
+	s = pdfStripControl(s)
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
+}
+
 func severityRGB(sev string) (uint8, uint8, uint8) {
 	switch sev {
 	case "CRITICAL":
@@ -184,18 +227,25 @@ func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
 		_ = pdf.Cell(nil, strings.Join(parts, "    "))
 	}
 
-	// Findings list.
+	// Findings list. Card height grows with the number of context lines
+	// the scanner harvested (rowH = base; +ctxLineH per context line).
 	y := 110.0
+	const ctxLineH = 10.0
 	for _, f := range findings {
-		if y+rowH > bottomCut {
+		ctxCount := len(f.ContextBefore) + len(f.ContextAfter)
+		cardH := rowH
+		if ctxCount > 0 {
+			cardH += float64(ctxCount)*ctxLineH + 8
+		}
+		if y+cardH > bottomCut {
 			pdf.AddPage()
 			y = 40
 		}
 		r, g, b := severityRGB(f.Severity.String())
 		pdf.SetFillColor(r, g, b)
-		pdf.RectFromUpperLeftWithStyle(marginX, y, 4, rowH, "F")
+		pdf.RectFromUpperLeftWithStyle(marginX, y, 4, cardH, "F")
 		pdf.SetFillColor(248, 248, 248)
-		pdf.RectFromUpperLeftWithStyle(marginX+4, y, contentW-4, rowH, "F")
+		pdf.RectFromUpperLeftWithStyle(marginX+4, y, contentW-4, cardH, "F")
 
 		_ = pdf.SetFont("gobold", "", 10)
 		pdf.SetTextColor(r, g, b)
@@ -226,7 +276,12 @@ func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
 		pdf.SetTextColor(40, 40, 40)
 		pdf.SetXY(marginX+12, y+42)
 		_ = pdf.Cell(nil, secret)
-		y += rowH + 6
+
+		if ctxCount > 0 {
+			renderPDFContext(&pdf, marginX+12, y+rowH, f)
+		}
+
+		y += cardH + 6
 	}
 
 	// Atomic write via random-suffix tempfile + rename.

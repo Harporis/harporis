@@ -100,12 +100,18 @@ func (h *HTML) flush(scanID string, findings []*v1.Finding) error {
 	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
 		return fmt.Errorf("sink: path %q escapes rootDir %q", path, h.rootDir)
 	}
+	type ctxLine struct {
+		LineNo  int32
+		Content string
+		Matched bool
+	}
 	type row struct {
 		Severity string
 		RuleID   string
 		Path     string
 		Line     int32
 		Secret   string
+		Context  []ctxLine // empty when scan didn't request --context > 0
 	}
 	rows := make([]row, 0, len(findings))
 	counts := map[string]int{}
@@ -114,12 +120,35 @@ func (h *HTML) flush(scanID string, findings []*v1.Finding) error {
 		if p == "" && len(f.Refs) > 0 {
 			p = f.Refs[0].Path
 		}
+		var ctx []ctxLine
+		if len(f.ContextBefore) > 0 || len(f.ContextAfter) > 0 {
+			ctx = make([]ctxLine, 0, len(f.ContextBefore)+1+len(f.ContextAfter))
+			startLine := f.LineNumber - int32(len(f.ContextBefore))
+			if startLine < 1 {
+				startLine = 1
+			}
+			ln := startLine
+			for _, b := range f.ContextBefore {
+				ctx = append(ctx, ctxLine{LineNo: ln, Content: string(b)})
+				ln++
+			}
+			ctx = append(ctx, ctxLine{LineNo: f.LineNumber, Content: string(f.MatchedLine), Matched: true})
+			ln = f.LineNumberEnd + 1
+			if ln <= 0 {
+				ln = f.LineNumber + 1
+			}
+			for _, a := range f.ContextAfter {
+				ctx = append(ctx, ctxLine{LineNo: ln, Content: string(a)})
+				ln++
+			}
+		}
 		rows = append(rows, row{
 			Severity: f.Severity.String(),
 			RuleID:   f.RuleId,
 			Path:     p,
 			Line:     f.LineNumber,
 			Secret:   string(f.MatchedSecret),
+			Context:  ctx,
 		})
 		counts[f.Severity.String()]++
 	}
@@ -182,6 +211,13 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
   th:hover { background: #efefef; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f1f1f1; padding: 1px 4px; border-radius: 3px; word-break: break-all; }
   .secret { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+  .ctx-toggle { background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.8rem; padding: 0; }
+  .ctx-toggle:hover { text-decoration: underline; }
+  .ctx-row { background: #fafafa; }
+  .ctx-row td { padding: 0; }
+  .ctx-row pre { margin: 0; padding: 0.6rem 0.8rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; white-space: pre; overflow-x: auto; color: #444; }
+  .ctx-row .ln { color: #999; user-select: none; display: inline-block; width: 3.5em; text-align: right; padding-right: 0.6em; }
+  .ctx-row .match { background: #fef9c3; display: block; }
 </style>
 </head>
 <body>
@@ -200,14 +236,16 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
   <th>Secret</th>
 </tr></thead>
 <tbody>
-{{range .Findings}}<tr>
+{{range $i, $f := .Findings}}<tr>
   <td><span class="badge {{.Severity}}">{{.Severity}}</span></td>
   <td><code>{{.RuleID}}</code></td>
   <td><code>{{.Path}}</code></td>
   <td>{{.Line}}</td>
-  <td class="secret"><code>{{.Secret}}</code></td>
+  <td class="secret"><code>{{.Secret}}</code>{{if .Context}} <button class="ctx-toggle" data-target="ctx-{{$i}}">show context</button>{{end}}</td>
 </tr>
-{{end}}</tbody>
+{{if .Context}}<tr class="ctx-row" id="ctx-{{$i}}" style="display:none"><td colspan="5"><pre>{{range .Context}}<span{{if .Matched}} class="match"{{end}}><span class="ln">{{.LineNo}}</span>{{.Content}}
+</span>{{end}}</pre></td></tr>
+{{end}}{{end}}</tbody>
 </table>
 <script>
   // Sort by column on header click.
@@ -232,11 +270,23 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
       rows.forEach(r => tbody.appendChild(r));
     });
   });
-  // Live filter.
+  // Live filter (skip the context-only rows; their visibility is tied
+  // to the parent finding row via the data-target toggle).
   document.getElementById("q").addEventListener("input", e => {
     const q = e.target.value.toLowerCase();
     document.querySelectorAll("#t tbody tr").forEach(row => {
+      if (row.classList.contains("ctx-row")) return;
       row.style.display = row.innerText.toLowerCase().includes(q) ? "" : "none";
+    });
+  });
+  // Toggle context rows.
+  document.querySelectorAll(".ctx-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tr = document.getElementById(btn.dataset.target);
+      if (!tr) return;
+      const open = tr.style.display !== "none";
+      tr.style.display = open ? "none" : "table-row";
+      btn.textContent = open ? "show context" : "hide context";
     });
   });
 </script>

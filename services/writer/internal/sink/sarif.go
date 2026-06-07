@@ -194,6 +194,7 @@ type sarifLocation struct {
 type sarifPhysicalLocation struct {
 	ArtifactLocation sarifArtifactLocation `json:"artifactLocation"`
 	Region           *sarifRegion          `json:"region,omitempty"`
+	ContextRegion    *sarifRegion          `json:"contextRegion,omitempty"`
 }
 
 type sarifArtifactLocation struct {
@@ -201,8 +202,13 @@ type sarifArtifactLocation struct {
 }
 
 type sarifRegion struct {
-	StartLine int32 `json:"startLine,omitempty"`
-	EndLine   int32 `json:"endLine,omitempty"`
+	StartLine int32          `json:"startLine,omitempty"`
+	EndLine   int32          `json:"endLine,omitempty"`
+	Snippet   *sarifSnippet  `json:"snippet,omitempty"`
+}
+
+type sarifSnippet struct {
+	Text string `json:"text"`
 }
 
 func buildSARIF(findings []*v1.Finding) sarifReport {
@@ -232,13 +238,16 @@ func findingToSARIF(f *v1.Finding) sarifResult {
 			"finding_id": f.FindingId,
 		},
 	}
+	region := buildRegion(f.LineNumber, f.LineNumberEnd)
+	context := buildContextRegion(f)
 	// Prefer the DIFF_WINDOW shape (FilePath + LineNumber directly on
 	// the Finding); fall back to BLOB-source refs (one location per ref).
 	if f.FilePath != "" {
 		r.Locations = []sarifLocation{{
 			PhysicalLocation: sarifPhysicalLocation{
 				ArtifactLocation: sarifArtifactLocation{URI: f.FilePath},
-				Region:           buildRegion(f.LineNumber, f.LineNumberEnd),
+				Region:           region,
+				ContextRegion:    context,
 			},
 		}}
 	} else if len(f.Refs) > 0 {
@@ -250,7 +259,8 @@ func findingToSARIF(f *v1.Finding) sarifResult {
 			r.Locations = append(r.Locations, sarifLocation{
 				PhysicalLocation: sarifPhysicalLocation{
 					ArtifactLocation: sarifArtifactLocation{URI: ref.Path},
-					Region:           buildRegion(f.LineNumber, f.LineNumberEnd),
+					Region:           region,
+					ContextRegion:    context,
 				},
 			})
 		}
@@ -267,6 +277,34 @@ func buildRegion(start, end int32) *sarifRegion {
 		r.EndLine = end
 	}
 	return r
+}
+
+// buildContextRegion folds the harvested context_before + matched_line
+// + context_after into a single SARIF contextRegion. Returns nil when
+// no context was harvested (preserves the pre-context-feature shape).
+func buildContextRegion(f *v1.Finding) *sarifRegion {
+	if len(f.ContextBefore) == 0 && len(f.ContextAfter) == 0 {
+		return nil
+	}
+	// startLine of the context window = line_number - len(context_before),
+	// clamped to 1 because line numbers are 1-based and the harvester
+	// may not have padded all the way (chunk-edge truncation).
+	start := f.LineNumber - int32(len(f.ContextBefore))
+	if start < 1 {
+		start = 1
+	}
+	lines := make([]string, 0, len(f.ContextBefore)+1+len(f.ContextAfter))
+	for _, ln := range f.ContextBefore {
+		lines = append(lines, string(ln))
+	}
+	lines = append(lines, string(f.MatchedLine))
+	for _, ln := range f.ContextAfter {
+		lines = append(lines, string(ln))
+	}
+	return &sarifRegion{
+		StartLine: start,
+		Snippet:   &sarifSnippet{Text: strings.Join(lines, "\n")},
+	}
 }
 
 func sarifLevel(sev v1.Severity) string {

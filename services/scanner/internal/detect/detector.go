@@ -87,6 +87,36 @@ func (d *Detector) ScanChunk(c *v1.GitRowChunk) []*v1.Finding {
 			// matched_line: full content of the starting line.
 			matchedLine := c.Rows[startLine].Content
 
+			// Harvest N surrounding lines if requested. Bounded by chunk
+			// edges, so the slice may be shorter than N. Order is
+			// "oldest first" — context_before[0] is the FARTHEST line
+			// before; context_after[last] is the FARTHEST line after.
+			var contextBefore, contextAfter [][]byte
+			if n := int(c.OutputContextLines); n > 0 {
+				lo := startLine - n
+				if lo < 0 {
+					lo = 0
+				}
+				if lo < startLine {
+					contextBefore = make([][]byte, 0, startLine-lo)
+					for i := lo; i < startLine; i++ {
+						contextBefore = append(contextBefore,
+							append([]byte(nil), c.Rows[i].Content...))
+					}
+				}
+				hi := endLine + 1 + n
+				if hi > len(c.Rows) {
+					hi = len(c.Rows)
+				}
+				if hi > endLine+1 {
+					contextAfter = make([][]byte, 0, hi-(endLine+1))
+					for i := endLine + 1; i < hi; i++ {
+						contextAfter = append(contextAfter,
+							append([]byte(nil), c.Rows[i].Content...))
+					}
+				}
+			}
+
 			f := &v1.Finding{
 				ScanId:          c.ScanId,
 				FindingId:       uuid.NewString(),
@@ -102,6 +132,8 @@ func (d *Detector) ScanChunk(c *v1.GitRowChunk) []*v1.Finding {
 				DetectedAtMs:    d.now().UnixMilli(),
 				DetectorVersion: d.detectorVersion,
 				OutputFormats:   c.OutputFormats,
+				ContextBefore:   contextBefore,
+				ContextAfter:    contextAfter,
 			}
 			switch c.Kind {
 			case v1.ChunkKind_DIFF_WINDOW:

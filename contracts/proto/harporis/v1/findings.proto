@@ -48,4 +48,16 @@ message Finding {
   // ScanRequest.output.formats through getter and scanner). Writer
   // dispatches to matching sinks only; empty = all enabled sinks.
   repeated string output_formats      = 40;
+
+  // Surrounding-context lines harvested by the scanner for triage.
+  // Each element is one raw line (without trailing \n) in source order:
+  // context_before[0] is the OLDEST line (lowest line number); the LAST
+  // entry of context_before is the line immediately before line_number.
+  // context_after[0] is the line immediately after line_number_end; the
+  // LAST entry is the FARTHEST line included.
+  // Both arrays are bounded by chunk edges, so the requested N may be
+  // truncated at the start/end of a file.
+  // Empty when OutputConfig.context_lines is 0 (the default).
+  repeated bytes context_before       = 41;
+  repeated bytes context_after        = 42;
 }

@@ -162,8 +162,14 @@ type GitRowChunk struct {
 	// each emitted Finding so writer can filter sinks per-finding.
 	// Empty list = use writer's full enabled set.
 	OutputFormats []string `protobuf:"bytes,50,rep,name=output_formats,json=outputFormats,proto3" json:"output_formats,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Number of surrounding lines the scanner should harvest into each
+	// Finding's context_before/context_after. Copied from
+	// ScanRequest.output.context_lines by getter. 0 = no context (default).
+	// Distinct from context_lines_above/below at 22/23, which describe
+	// DIFF_WINDOW reconstruction, not per-finding output shape.
+	OutputContextLines int32 `protobuf:"varint,51,opt,name=output_context_lines,json=outputContextLines,proto3" json:"output_context_lines,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GitRowChunk) Reset() {
@@ -322,6 +328,13 @@ func (x *GitRowChunk) GetOutputFormats() []string {
 	return nil
 }
 
+func (x *GitRowChunk) GetOutputContextLines() int32 {
+	if x != nil {
+		return x.OutputContextLines
+	}
+	return 0
+}
+
 type CommitFileRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CommitSha     []byte                 `protobuf:"bytes,1,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"` // raw SHA
@@ -392,7 +405,7 @@ const file_harporis_v1_types_proto_rawDesc = "" +
 	"lineNumber\x12\x1f\n" +
 	"\vbyte_offset\x18\x02 \x01(\x03R\n" +
 	"byteOffset\x12\x18\n" +
-	"\acontent\x18\x03 \x01(\fR\acontent\"\x91\x05\n" +
+	"\acontent\x18\x03 \x01(\fR\acontent\"\xc3\x05\n" +
 	"\vGitRowChunk\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12\x19\n" +
 	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12'\n" +
@@ -417,7 +430,8 @@ const file_harporis_v1_types_proto_rawDesc = "" +
 	"\vchunk_count\x18\" \x01(\x05R\n" +
 	"chunkCount\x12'\n" +
 	"\x04rows\x18( \x03(\v2\x13.harporis.v1.GitRowR\x04rows\x12%\n" +
-	"\x0eoutput_formats\x182 \x03(\tR\routputFormats\"`\n" +
+	"\x0eoutput_formats\x182 \x03(\tR\routputFormats\x120\n" +
+	"\x14output_context_lines\x183 \x01(\x05R\x12outputContextLines\"`\n" +
 	"\rCommitFileRef\x12\x1d\n" +
 	"\n" +
 	"commit_sha\x18\x01 \x01(\fR\tcommitSha\x12\x12\n" +

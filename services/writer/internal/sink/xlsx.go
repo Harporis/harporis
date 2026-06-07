@@ -58,6 +58,21 @@ func NewXLSXN(rootDir string, maxPerScan int) (*XLSX, error) {
 
 func (x *XLSX) Name() string { return "xlsx_file" }
 
+// joinBytesLines glues a slice of raw line bytes with literal newlines
+// for embedding into a single XLSX cell. Returns "" when the slice is
+// empty so the cell stays visually empty rather than holding a stray
+// newline character.
+func joinBytesLines(lines [][]byte) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	parts := make([]string, len(lines))
+	for i, l := range lines {
+		parts[i] = string(l)
+	}
+	return strings.Join(parts, "\n")
+}
+
 func (x *XLSX) Write(ctx context.Context, f *v1.Finding) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -110,7 +125,7 @@ func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {
 	f.SetActiveSheet(0)
 
 	// Header row: bold, frozen.
-	headers := []string{"severity", "rule_id", "file_path", "line", "secret", "finding_id"}
+	headers := []string{"severity", "rule_id", "file_path", "line", "secret", "finding_id", "ctx_before", "ctx_after"}
 	for i, h := range headers {
 		cell, _ := xlsxlib.CoordinatesToCellName(i+1, 1)
 		if err := f.SetCellValue(sheet, cell, h); err != nil {
@@ -121,7 +136,7 @@ func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {
 		Font: &xlsxlib.Font{Bold: true},
 		Fill: xlsxlib.Fill{Type: "pattern", Color: []string{"#E5E7EB"}, Pattern: 1},
 	})
-	_ = f.SetCellStyle(sheet, "A1", "F1", headerStyle)
+	_ = f.SetCellStyle(sheet, "A1", "H1", headerStyle)
 	_ = f.SetPanes(sheet, &xlsxlib.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
 
 	// Per-severity row fill — quick visual triage.
@@ -149,6 +164,8 @@ func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {
 			fnd.LineNumber,
 			string(fnd.MatchedSecret),
 			fnd.FindingId,
+			joinBytesLines(fnd.ContextBefore),
+			joinBytesLines(fnd.ContextAfter),
 		}
 		for col, v := range values {
 			cell, _ := xlsxlib.CoordinatesToCellName(col+1, row)
@@ -170,6 +187,7 @@ func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {
 	_ = f.SetColWidth(sheet, "D", "D", 8)
 	_ = f.SetColWidth(sheet, "E", "E", 60)
 	_ = f.SetColWidth(sheet, "F", "F", 38)
+	_ = f.SetColWidth(sheet, "G", "H", 60)
 
 	// excelize requires the file path to end in .xlsx (it detects the
 	// format from extension). os.CreateTemp gives random-suffix-after-

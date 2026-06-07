@@ -72,6 +72,76 @@ func TestSARIF_WritesValidReportPerScan(t *testing.T) {
 	}
 }
 
+func TestSARIF_ContextRegionPopulatedWhenContextHarvested(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewSARIF(dir)
+	if err != nil {
+		t.Fatalf("NewSARIF: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	ctx := context.Background()
+	f := &v1.Finding{
+		ScanId:        "scan-ctx",
+		FindingId:     "f1",
+		RuleId:        "aws-key",
+		Severity:      v1.Severity_HIGH,
+		FilePath:      "src/.env",
+		LineNumber:    3,
+		LineNumberEnd: 3,
+		MatchedLine:   []byte("aws_key = AKIA..."),
+		ContextBefore: [][]byte{[]byte("line1"), []byte("line2")},
+		ContextAfter:  [][]byte{[]byte("line4")},
+	}
+	if err := s.Write(ctx, f); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "scan-ctx.sarif"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var doc sarifReport
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	res := doc.Runs[0].Results[0]
+	if len(res.Locations) != 1 {
+		t.Fatalf("want 1 location, got %d", len(res.Locations))
+	}
+	cr := res.Locations[0].PhysicalLocation.ContextRegion
+	if cr == nil {
+		t.Fatalf("ContextRegion is nil; expected populated")
+	}
+	if cr.StartLine != 1 {
+		t.Errorf("ContextRegion.StartLine = %d, want 1 (3 - len(before:2))", cr.StartLine)
+	}
+	if cr.Snippet == nil {
+		t.Fatalf("Snippet is nil")
+	}
+	want := "line1\nline2\naws_key = AKIA...\nline4"
+	if cr.Snippet.Text != want {
+		t.Errorf("Snippet.Text = %q, want %q", cr.Snippet.Text, want)
+	}
+}
+
+func TestSARIF_NoContextRegionWhenScannerSkipsContext(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewSARIF(dir)
+	t.Cleanup(func() { _ = s.Close() })
+	_ = s.Write(context.Background(), &v1.Finding{
+		ScanId: "no-ctx", FindingId: "f1", RuleId: "x",
+		Severity: v1.Severity_LOW, FilePath: "a.txt", LineNumber: 1,
+	})
+	b, _ := os.ReadFile(filepath.Join(dir, "no-ctx.sarif"))
+	var doc sarifReport
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cr := doc.Runs[0].Results[0].Locations[0].PhysicalLocation.ContextRegion; cr != nil {
+		t.Errorf("expected nil ContextRegion when no context harvested; got %+v", cr)
+	}
+}
+
 func TestSARIF_RejectsInvalidScanID(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewSARIF(dir)
