@@ -35,7 +35,8 @@ func newScanCmd() *cobra.Command {
 		branch, baseBranch, commitFrom, commitTo string
 		formats                                  []string
 		contextLines                             int32
-		noWait, noMountHost                      bool
+		noWait, noMountHost, fromInit            bool
+		initTo, commit, rangeSpec                string
 		idleTimeout                              time.Duration
 	)
 	c := &cobra.Command{
@@ -44,6 +45,13 @@ func newScanCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if scanID == "" {
 				scanID = uuid.NewString()
+			}
+			// Range presets are mutually exclusive shortcuts that expand
+			// into --type / --from / --to. Resolve them first so the
+			// subsequent code path is unchanged.
+			if err := applyRangePresets(cmd, &scanType, &commitFrom, &commitTo,
+				fromInit, initTo, commit, rangeSpec); err != nil {
+				return err
 			}
 			typ, ok := scanTypeFromString(scanType)
 			if !ok {
@@ -133,6 +141,10 @@ func newScanCmd() *cobra.Command {
 	c.Flags().DurationVar(&idleTimeout, "timeout", 30*time.Minute, "give up if no status events arrive for this long")
 	c.Flags().StringSliceVarP(&formats, "format", "f", nil, "writer output formats this scan should emit (comma-separated). Allowed: "+strings.Join(writerFormats, ", ")+". Empty = all writer-enabled sinks fire (default).")
 	c.Flags().Int32Var(&contextLines, "context", 0, fmt.Sprintf("number of lines BEFORE and AFTER each finding to include in the report (0 = no context, capped at %d). Visible in NDJSON/SARIF/HTML/XLSX/PDF.", maxContextLines))
+	c.Flags().BoolVar(&fromInit, "from-init", false, "shortcut for --type full_history (scan every commit reachable from init)")
+	c.Flags().StringVar(&initTo, "init-to", "", "shortcut for --type commit_range --from <init> --to <sha> (init → sha)")
+	c.Flags().StringVar(&commit, "commit", "", "shortcut for --type commit_range scanning a single commit's diff (sha~1 → sha)")
+	c.Flags().StringVar(&rangeSpec, "range", "", "shortcut for --type commit_range using git A..B syntax")
 	return c
 }
 

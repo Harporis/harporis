@@ -43,6 +43,36 @@ func TestRevList_Range(t *testing.T) {
 	require.Contains(t, shas, head)
 }
 
+func TestRevList_RangeFromInit(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a", "1")
+	c1 := r.Commit("c1")
+	r.Write("a", "2")
+	c2 := r.Commit("c2")
+	r.Write("a", "3")
+	c3 := r.Commit("c3")
+
+	ctx := context.Background()
+	// Empty From + To set = walk every commit reachable from To
+	// (the init-to-<sha> case).
+	shas, err := RevList(ctx, r.Dir, RevListArgs{
+		Range: &CommitRange{From: "", To: c2},
+	})
+	require.NoError(t, err)
+	require.Contains(t, shas, c1) // init included
+	require.Contains(t, shas, c2)
+	require.NotContains(t, shas, c3) // beyond To
+}
+
+func TestRevList_RangeRequiresTo(t *testing.T) {
+	r := testutil.NewGitRepo(t)
+	r.Write("a", "1")
+	r.Commit("c1")
+	ctx := context.Background()
+	_, err := RevList(ctx, r.Dir, RevListArgs{Range: &CommitRange{From: "abc", To: ""}})
+	require.Error(t, err)
+}
+
 func TestRevList_Branch(t *testing.T) {
 	r := testutil.NewGitRepo(t)
 	r.Write("a", "1")

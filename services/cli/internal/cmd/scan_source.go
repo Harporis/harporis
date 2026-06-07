@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
 
@@ -69,6 +71,78 @@ func translateLocalPath(local, home string, mountHost bool) (string, error) {
 		)
 	}
 	return "/host/" + filepath.ToSlash(rel), nil
+}
+
+// applyRangePresets expands the convenience flags (--from-init,
+// --init-to, --commit, --range) into the underlying --type/--from/--to
+// triple. Presets are mutually exclusive with one another AND with the
+// raw flags they would clobber — combining them surfaces as an error
+// instead of silently winning, so the operator's intent stays explicit.
+func applyRangePresets(cmd *cobra.Command, scanType, commitFrom, commitTo *string,
+	fromInit bool, initTo, single, rangeSpec string) error {
+	picked := 0
+	if fromInit {
+		picked++
+	}
+	if initTo != "" {
+		picked++
+	}
+	if single != "" {
+		picked++
+	}
+	if rangeSpec != "" {
+		picked++
+	}
+	if picked == 0 {
+		return nil
+	}
+	if picked > 1 {
+		return errors.New("--from-init, --init-to, --commit, --range are mutually exclusive")
+	}
+	// Reject conflicts with the raw flags presets would expand into.
+	// `--type` is special-cased via Changed() so the default "current_state"
+	// doesn't trigger the conflict check.
+	if cmd.Flags().Changed("type") {
+		return errors.New("range presets conflict with --type; pick one form")
+	}
+	if *commitFrom != "" || *commitTo != "" {
+		return errors.New("range presets conflict with --from/--to; pick one form")
+	}
+	switch {
+	case fromInit:
+		*scanType = "full_history"
+	case initTo != "":
+		*scanType = "commit_range"
+		*commitFrom = "" // empty = from init; getter handles via plain rev-list
+		*commitTo = initTo
+	case single != "":
+		*scanType = "commit_range"
+		*commitFrom = single + "~1"
+		*commitTo = single
+	case rangeSpec != "":
+		from, to, ok := parseGitRange(rangeSpec)
+		if !ok {
+			return fmt.Errorf("invalid --range %q (want A..B)", rangeSpec)
+		}
+		*scanType = "commit_range"
+		*commitFrom = from
+		*commitTo = to
+	}
+	return nil
+}
+
+// parseGitRange splits "A..B" — the git-native range syntax. Rejects
+// the symmetric "..." form (different semantics: merge-base) so the
+// operator gets an explicit error rather than a silently wrong scan.
+func parseGitRange(s string) (from, to string, ok bool) {
+	if strings.Contains(s, "...") {
+		return "", "", false
+	}
+	parts := strings.SplitN(s, "..", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func scanTypeFromString(s string) (v1.ScanType, bool) {
