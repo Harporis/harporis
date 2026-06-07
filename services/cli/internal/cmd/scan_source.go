@@ -17,6 +17,16 @@ import (
 // override it.
 var hostPathStat = os.Stat
 
+// hostEvalSymlinks is the indirection used by translateLocalPath to
+// resolve any symlinks in the user-supplied --local path BEFORE the
+// $HOME containment check. Defence-in-depth: getter mounts $HOME
+// read-only, so a symlink inside $HOME pointing outside $HOME would
+// still resolve through the read-only mount and could expose
+// arbitrary files. By following links here and re-checking
+// containment against the resolved path, we keep the operator's
+// scan confined to what's actually under $HOME.
+var hostEvalSymlinks = filepath.EvalSymlinks
+
 // translateLocalPath converts a host-side absolute path to the
 // container-side path the getter will see. When mountHost is true and
 // the path lies under home (typically $HOME) AND exists on the host,
@@ -56,7 +66,23 @@ func translateLocalPath(local, home string, mountHost bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("--local %q: %w", local, err)
 	}
-	rel, err := filepath.Rel(home, abs)
+	// Resolve symlinks so the containment check below catches
+	// "$HOME/link -> /etc" style escapes. Best-effort: if the resolve
+	// fails (broken symlink, permission denied), fall back to the
+	// original abs path and let the Rel/.. check below reject it if it
+	// escapes — the getter's read-only mount limits the blast radius.
+	if resolved, rerr := hostEvalSymlinks(abs); rerr == nil {
+		abs = resolved
+	}
+	// Also resolve symlinks in $HOME itself — operators sometimes have
+	// $HOME on a symlinked partition (e.g. /home -> /var/home). Without
+	// this, filepath.Rel would compare resolved abs against unresolved
+	// home and report "escapes $HOME" for a path that's clearly inside.
+	homeResolved := home
+	if resolved, rerr := hostEvalSymlinks(home); rerr == nil {
+		homeResolved = resolved
+	}
+	rel, err := filepath.Rel(homeResolved, abs)
 	if err != nil {
 		return "", fmt.Errorf(
 			"--local %q is not under $HOME (%s); either move it under $HOME, mount it via docker-compose.override.yml, or pass --no-mount-host",

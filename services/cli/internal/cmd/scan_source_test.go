@@ -148,6 +148,54 @@ func TestTranslateLocalPath_EmptyHomeRejected(t *testing.T) {
 	}
 }
 
+// Symlink inside $HOME that resolves OUTSIDE $HOME must be rejected
+// even though the user-supplied path appears to be under $HOME.
+func TestTranslateLocalPath_SymlinkOutsideHomeRejected(t *testing.T) {
+	hostPathStat = stubStat(map[string]bool{"/home/u/link": true})
+	defer func() { hostPathStat = os.Stat }()
+	hostEvalSymlinks = func(p string) (string, error) {
+		if p == "/home/u/link" {
+			return "/etc/secret", nil
+		}
+		return p, nil
+	}
+	defer func() { hostEvalSymlinks = filepath.EvalSymlinks }()
+
+	_, err := translateLocalPath("/home/u/link", "/home/u", true)
+	if err == nil {
+		t.Fatal("expected rejection: symlink resolves outside $HOME")
+	}
+	if !strings.Contains(err.Error(), "$HOME") {
+		t.Fatalf("error must call out $HOME containment: %v", err)
+	}
+}
+
+// $HOME on a symlinked partition (e.g. /home -> /var/home) must still
+// translate paths that live under it.
+func TestTranslateLocalPath_SymlinkedHomeStillTranslates(t *testing.T) {
+	hostPathStat = stubStat(map[string]bool{"/home/u/code/repo": true})
+	defer func() { hostPathStat = os.Stat }()
+	hostEvalSymlinks = func(p string) (string, error) {
+		// Both abs and home resolve to the same /var/home prefix.
+		switch p {
+		case "/home/u/code/repo":
+			return "/var/home/u/code/repo", nil
+		case "/home/u":
+			return "/var/home/u", nil
+		}
+		return p, nil
+	}
+	defer func() { hostEvalSymlinks = filepath.EvalSymlinks }()
+
+	got, err := translateLocalPath("/home/u/code/repo", "/home/u", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "/host/code/repo" {
+		t.Fatalf("expected /host/code/repo after symlink resolution; got %q", got)
+	}
+}
+
 func TestParseGitRange(t *testing.T) {
 	cases := []struct {
 		in   string
