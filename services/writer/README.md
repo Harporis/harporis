@@ -1,15 +1,16 @@
 # services/writer
 
 Stateless, horizontally scalable consumer of `HARPORIS_FINDINGS` that
-materializes detected secrets to durable sinks. Ships five sinks
-out of the box — **NDJSON**, **SARIF**, **HTML**, **XLSX**, **PDF** —
-all enabled by default and selectable per-scan from the CLI.
+materializes detected secrets to durable sinks. Ships six sinks out
+of the box — **NDJSON**, **SARIF**, **HTML**, **XLSX**, **PDF**,
+**Parquet** — all enabled by default and selectable per-scan from
+the CLI.
 
 ```
 ┌─────────┐     ┌─────────────┐     ┌────────┐     ┌──────────────────────┐     ┌──────────┐
 │ scanner │ ──▶ │    NATS     │ ──▶ │ writer │ ──▶ │ <scan_id>.{ndjson,   │ ──▶ │ harporis │
-│ (N rep) │ ◀── │ (JetStream) │ ◀── │ (Nrep) │     │  sarif, html,        │     │ findings │
-└─────────┘     └─────────────┘     └────────┘     │  xlsx, pdf}          │     └──────────┘
+│ (N rep) │ ◀── │ (JetStream) │ ◀── │ (Nrep) │     │  sarif, html, xlsx,  │     │ findings │
+└─────────┘     └─────────────┘     └────────┘     │  pdf, parquet}       │     └──────────┘
                                                    │  (host bind-mount)   │
                                                    └──────────────────────┘
 ```
@@ -28,9 +29,9 @@ all enabled by default and selectable per-scan from the CLI.
 - Sink semantics differ by format:
   - **NDJSON** — append-per-write, one open `*os.File` per scan_id with
     O_APPEND for kernel-side line atomicity up to PIPE_BUF.
-  - **SARIF / HTML / XLSX / PDF** — in-memory accumulator per scan_id,
-    rewritten atomically (tempfile + `os.Rename`) on every Write.
-    Capped per scan_id to bound memory.
+  - **SARIF / HTML / XLSX / PDF / Parquet** — in-memory accumulator per
+    scan_id, rewritten atomically (tempfile + `os.Rename`) on every
+    Write. Capped per scan_id to bound memory.
 
 ## Run locally
 
@@ -76,6 +77,7 @@ allocate a TTY, so no LF translation.
 | `html_enabled`         | `true`                           | Enable HTML sink. |
 | `xlsx_enabled`         | `true`                           | Enable XLSX sink. |
 | `pdf_enabled`          | `true`                           | Enable PDF sink. |
+| `parquet_enabled`      | `true`                           | Enable Parquet sink (SIEM/data-warehouse ingestion). |
 | `metrics_addr`         | `:9102`                          | `/metrics`, `/healthz`, `/readyz`. |
 | `log_level`            | `info`                           | `debug|info|warn|error`. |
 
@@ -101,7 +103,7 @@ writer_active_scans
 writer_build_info{version,commit,proto_version}
 ```
 
-`{sink}` is one of `ndjson_file`, `sarif`, `html`, `xlsx`, `pdf`.
+`{sink}` is one of `ndjson_file`, `sarif_file`, `html_file`, `xlsx_file`, `pdf_file`, `parquet_file`.
 
 ## Horizontal scaling
 
@@ -136,6 +138,7 @@ same scan_id (O_APPEND linearizes).
 | `internal/sink/html.go`                    | Self-contained HTML with inline CSS+JS (sort, filter, badges). |
 | `internal/sink/xlsx.go`                    | XLSX via excelize; frozen header, per-severity row fill. |
 | `internal/sink/pdf.go`                     | PDF via gopdf + `gofont.GoRegular/GoBold` (no system fonts). |
+| `internal/sink/parquet.go`                 | Parquet via `parquet-go/parquet-go` (pure-Go, no Arrow dep). |
 | `internal/sink/filter.go`                  | `WantedByFinding(s, formats)` — per-scan format filter. |
 | `internal/metrics/metrics.go`              | Prometheus collectors + HTTP serve. |
 | `internal/health/health.go`                | `/healthz`, `/readyz`. |

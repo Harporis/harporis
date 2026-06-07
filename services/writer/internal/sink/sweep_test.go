@@ -25,6 +25,7 @@ func TestLooksLikeOrphanTempfile(t *testing.T) {
 		{"scan-1.html.tmp-deadbeef0", true},
 		{".scan-1.abc123.xlsx", true},
 		{".scan-1.abc123.pdf", true},
+		{".scan-1.abc123.parquet", true},
 		// Edge: scan id containing dots is fine — still matches.
 		{".scan.with.dots.abc123.pdf", true},
 	}
@@ -43,10 +44,12 @@ func TestSweepOrphanTempfiles_RemovesOnlyTempfiles(t *testing.T) {
 		"scan-a.html":               false, // keep
 		"scan-a.xlsx":               false, // keep
 		"scan-a.pdf":                false, // keep
+		"scan-a.parquet":            false, // keep
 		"scan-a.sarif.tmp-abc":      true,  // sweep
 		"scan-b.html.tmp-0xff":      true,  // sweep
 		".scan-c.abc123.xlsx":       true,  // sweep
 		".scan-d.deadbeef.pdf":      true,  // sweep
+		".scan-e.feedface.parquet":  true,  // sweep
 	}
 	for name := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {

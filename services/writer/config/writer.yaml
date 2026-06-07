@@ -15,6 +15,7 @@ max_ack_pending: 64
 output_dir: "${HARPORIS_OUTPUT_DIR:-/var/lib/harporis/findings}"
 ndjson_enabled: true        # one .ndjson per scan_id (streaming-friendly, jq input)
 sarif_enabled: true         # one .sarif per scan_id (SARIF v2.1.0, IDE/SCM integrations)
-mask_secrets: false         # when true, HTML+PDF render secret[:4] + "***" (NDJSON/SARIF/XLSX always carry raw secrets)
+parquet_enabled: true       # one .parquet per scan_id (SIEM / data-warehouse / DuckDB ingestion)
+mask_secrets: false         # when true, HTML+PDF render secret[:4] + "***" (NDJSON/SARIF/XLSX/Parquet always carry raw secrets)
 metrics_addr: ":9102"
 log_level: "${LOG_LEVEL:-info}"

@@ -3,7 +3,7 @@
 Git-aware secret hunter. A horizontally scalable pipeline that ingests
 git repositories, detects secrets with a hot-reloadable regex +
 Shannon-entropy rule pack, and materializes findings to durable
-sinks — NDJSON, SARIF, HTML, XLSX, PDF.
+sinks — NDJSON, SARIF, HTML, XLSX, PDF, Parquet.
 
 ## Architecture
 
@@ -17,7 +17,8 @@ sinks — NDJSON, SARIF, HTML, XLSX, PDF.
                                                                   ┌────────────────────────────┐
                                                                   │ ./findings/  (host bind)   │
                                                                   │  <scan_id>.{ndjson,sarif,  │
-                                                                  │     html, xlsx, pdf}       │
+                                                                  │   html, xlsx, pdf,         │
+                                                                  │   parquet}                 │
                                                                   └────────────────────────────┘
 ```
 
@@ -25,7 +26,8 @@ sinks — NDJSON, SARIF, HTML, XLSX, PDF.
 - `scanner` — pulls chunks, applies the rule pack (hot-reloaded from
   `services/scanner/rules/default.yaml`), publishes findings.
 - `writer` — pulls findings, fans out to enabled sinks
-  (NDJSON / SARIF / HTML / XLSX / PDF), one file per scan_id per format.
+  (NDJSON / SARIF / HTML / XLSX / PDF / Parquet), one file per
+  scan_id per format.
 - `harporis` (CLI) — submits scans, watches status, reads findings.
   Works from any CWD; auto-discovers `NATS_TOKEN` on localhost.
 
@@ -75,8 +77,8 @@ Re-run the installer any time — every step is idempotent.
 | `HARPORIS_FINDINGS_DIR` | `./findings` (next to `docker-compose.yml`) | Host directory for materialized reports. Writer runs as host `${UID}:${GID}` so files are operator-owned. |
 | `services/scanner/rules/default.yaml` | bind-mounted RO into scanner | Edit on the host; scanner re-parses + atomic-swaps within 5s. Invalid YAML preserves the previous pack (logged at Warn). |
 | `NATS_TOKEN` | `harporis-dev` (compose substitution) | Required by NATS auth. CLI auto-discovers from `docker inspect harporis-nats` on localhost URLs; production must set explicitly. |
-| `harporis scan -f <list>` | empty = every enabled sink fires | Per-scan format selection. Accepted: `ndjson`, `sarif`, `html`, `xlsx`, `pdf`. |
-| `harporis findings show -f <fmt>` | `ndjson` | Read-side formats: `ndjson`, `pretty`, `sarif`, `json`, `csv`, `md`, `html`, `xlsx`, `pdf`. |
+| `harporis scan -f <list>` | empty = every enabled sink fires | Per-scan format selection. Accepted: `ndjson`, `sarif`, `html`, `xlsx`, `pdf`, `parquet`. |
+| `harporis findings show -f <fmt>` | `ndjson` | Read-side formats: `ndjson`, `pretty`, `sarif`, `json`, `csv`, `md`, `html`, `xlsx`, `pdf`, `parquet`. |
 
 ## Hands-on docs
 

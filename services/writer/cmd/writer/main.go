@@ -96,6 +96,13 @@ func main() {
 		}
 		sinks = append(sinks, ps)
 	}
+	if cfg.ParquetEnabled != nil && *cfg.ParquetEnabled {
+		pq, err := sink.NewParquet(cfg.OutputDir)
+		if err != nil {
+			fatal("init parquet sink: %v", err)
+		}
+		sinks = append(sinks, pq)
+	}
 	if len(sinks) == 0 {
 		fatal("no sinks enabled — set ndjson_enabled or sarif_enabled to true")
 	}

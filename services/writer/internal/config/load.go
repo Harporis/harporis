@@ -27,11 +27,12 @@ type Config struct {
 	// Sink toggles. Both default to true so the operator-zero-config
 	// case writes both NDJSON (streaming-friendly) and SARIF (industry-
 	// standard for code-scanning tools).
-	NDJSONEnabled *bool  `yaml:"ndjson_enabled"`
-	SARIFEnabled  *bool  `yaml:"sarif_enabled"`
-	HTMLEnabled   *bool  `yaml:"html_enabled"`
-	XLSXEnabled   *bool  `yaml:"xlsx_enabled"`
-	PDFEnabled    *bool  `yaml:"pdf_enabled"`
+	NDJSONEnabled  *bool  `yaml:"ndjson_enabled"`
+	SARIFEnabled   *bool  `yaml:"sarif_enabled"`
+	HTMLEnabled    *bool  `yaml:"html_enabled"`
+	XLSXEnabled    *bool  `yaml:"xlsx_enabled"`
+	PDFEnabled     *bool  `yaml:"pdf_enabled"`
+	ParquetEnabled *bool  `yaml:"parquet_enabled"`
 	// MaskSecrets, when true, renders matched_secret as first-4 chars +
 	// "***" in human-facing sinks (HTML + PDF). NDJSON/SARIF/XLSX still
 	// carry the raw secret because their primary use cases (jq
@@ -98,6 +99,10 @@ func applyDefaults(c *Config) {
 	if c.PDFEnabled == nil {
 		v := true
 		c.PDFEnabled = &v
+	}
+	if c.ParquetEnabled == nil {
+		v := true
+		c.ParquetEnabled = &v
 	}
 	if c.MaskSecrets == nil {
 		v := false

@@ -31,18 +31,19 @@ func newFindingsCmd() *cobra.Command {
 }
 
 // supportedFormats is the closed set accepted by --format.
-//   - ndjson, pretty, json, csv, md: derived from <id>.ndjson on disk
-//   - sarif, html, xlsx, pdf:        read straight from the writer's
+//   - ndjson, pretty, json, csv, md:           derived from <id>.ndjson on disk
+//   - sarif, html, xlsx, pdf, parquet:         read straight from the writer's
 //     <id>.<ext> file (writer's sink wrote them; CLI just streams)
-var supportedFormats = []string{"ndjson", "pretty", "sarif", "json", "csv", "md", "html", "xlsx", "pdf"}
+var supportedFormats = []string{"ndjson", "pretty", "sarif", "json", "csv", "md", "html", "xlsx", "pdf", "parquet"}
 
 // formatToExt maps a --format value to the file extension the writer
 // uses. Empty string means "derive from ndjson on the CLI side".
 var formatToExt = map[string]string{
-	"sarif": ".sarif",
-	"html":  ".html",
-	"xlsx":  ".xlsx",
-	"pdf":   ".pdf",
+	"sarif":   ".sarif",
+	"html":    ".html",
+	"xlsx":    ".xlsx",
+	"pdf":     ".pdf",
+	"parquet": ".parquet",
 }
 
 func newFindingsShowCmd() *cobra.Command {
@@ -64,7 +65,8 @@ func newFindingsShowCmd() *cobra.Command {
 			"  md      Markdown table (good for PR/issue comments)\n" +
 			"  html    self-contained browser report with sort + filter\n" +
 			"  xlsx    Excel workbook (audit/triage in spreadsheets)\n" +
-			"  pdf     printable A4 report (formal hand-off / compliance binder)",
+			"  pdf     printable A4 report (formal hand-off / compliance binder)\n" +
+			"  parquet columnar workbook (SIEM ingestion, DuckDB/Polars/Athena)",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanID := args[0]

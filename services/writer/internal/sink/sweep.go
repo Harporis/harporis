@@ -69,11 +69,15 @@ func looksLikeOrphanTempfile(name string) bool {
 			return true
 		}
 	}
-	// crypto/rand mint shape: ".<scan_id>.<hex>.xlsx" / ".pdf"
+	// crypto/rand mint shape: ".<scan_id>.<hex>.{xlsx,pdf,parquet}"
 	// Must start with '.', have at least two more '.' segments before
-	// the extension, and end in .xlsx or .pdf.
+	// the extension, and end in one of the known mint-suffixed sink
+	// extensions.
 	if strings.HasPrefix(name, ".") {
-		if strings.HasSuffix(name, ".xlsx") || strings.HasSuffix(name, ".pdf") {
+		switch {
+		case strings.HasSuffix(name, ".xlsx"),
+			strings.HasSuffix(name, ".pdf"),
+			strings.HasSuffix(name, ".parquet"):
 			// Count interior dots so we don't match e.g. ".hidden.xlsx".
 			// Need at least: .<scan_id>.<hex>.<ext>  -> 3 dots total.
 			if strings.Count(name, ".") >= 3 {

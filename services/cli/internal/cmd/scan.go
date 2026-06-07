@@ -21,7 +21,7 @@ import (
 // — what `harporis scan --format` is allowed to request. Distinct from
 // the read-side `findings show --format` set (which also includes
 // CLI-derived shapes like pretty/json/csv/md).
-var writerFormats = []string{"ndjson", "sarif", "html", "xlsx", "pdf"}
+var writerFormats = []string{"ndjson", "sarif", "html", "xlsx", "pdf", "parquet"}
 
 // maxContextLines caps `--context` client-side so an operator typo
 // (e.g. 100000) gets a friendly error instead of silently shipping a
@@ -181,6 +181,7 @@ func printFormatHelp(w io.Writer) {
 	fmt.Fprintln(w, "  html    self-contained browser report (writer's <scan_id>.html)")
 	fmt.Fprintln(w, "  xlsx    Excel workbook (writer's <scan_id>.xlsx)")
 	fmt.Fprintln(w, "  pdf     printable A4 report (writer's <scan_id>.pdf)")
+	fmt.Fprintln(w, "  parquet columnar workbook (writer's <scan_id>.parquet; DuckDB/Polars/Athena)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Note: requesting `scan -f pdf` while pdf_enabled=false in writer.yaml is")
 	fmt.Fprintln(w, "silently dropped; the writer's writer_sink_format_ignored_total metric ticks.")
