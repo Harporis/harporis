@@ -1,0 +1,78 @@
+# goreleaser config for the harporis CLI binary.
+#
+# Scope: this config publishes the operator CLI only. The three
+# services (getter, scanner, writer) ship as docker images via a
+# separate workflow (TODO) — outsiders rarely run them standalone.
+#
+# Triggered by tags matching `cli/v*` via .github/workflows/release-cli.yml.
+# Local dry-run:  goreleaser release --snapshot --clean
+
+version: 2
+
+project_name: harporis
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: harporis
+    main: ./cmd/harporis
+    binary: harporis
+    dir: services/cli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/Harporis/harporis/services/cli/internal/version.Version={{ .Version }}
+      - -X github.com/Harporis/harporis/services/cli/internal/version.Commit={{ .ShortCommit }}
+
+archives:
+  - id: harporis
+    name_template: "harporis_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - src: services/cli/README.md
+        dst: docs/cli-README.md
+      - src: services/cli/completions/harporis.bash
+        dst: completion/harporis.bash
+      - src: services/cli/completions/_harporis
+        dst: completion/_harporis
+      - src: services/cli/completions/harporis.fish
+        dst: completion/harporis.fish
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
+
+release:
+  github:
+    owner: Harporis
+    name: harporis
+  # tag pattern is cli/vX.Y.Z; goreleaser strips the cli/ prefix for the
+  # release name so the GitHub release reads "harporis CLI vX.Y.Z".
+  name_template: "harporis CLI v{{ .Version }}"
+  draft: false
+  prerelease: auto
+  header: |
+    Harporis CLI release. Service images (getter/scanner/writer) are
+    published separately to ghcr.io on their own per-service tags.
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^chore:"
+      - "^docs:"
+      - "^test:"

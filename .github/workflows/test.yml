@@ -1,0 +1,45 @@
+# CI: run the full test suite on every push to feat/main and every PR.
+# Mirrors `make all-test` locally — 28 packages across 4 service modules
+# plus contracts/kit. Race-detector on (matches per-module Makefiles).
+name: test
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup-go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+          # All 4 service modules + contracts + kit share a go.sum prefix;
+          # let setup-go discover all of them under the workspace.
+          cache-dependency-path: |
+            **/go.sum
+
+      - name: vet
+        run: |
+          for m in contracts kit services/cli services/getter services/scanner services/writer; do
+            echo "::group::vet $m"
+            (cd "$m" && go vet ./...)
+            echo "::endgroup::"
+          done
+
+      - name: test
+        run: make all-test
