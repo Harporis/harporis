@@ -151,14 +151,25 @@ type GitRowChunk struct {
 	ContextLinesAbove int32  `protobuf:"varint,22,opt,name=context_lines_above,json=contextLinesAbove,proto3" json:"context_lines_above,omitempty"`
 	ContextLinesBelow int32  `protobuf:"varint,23,opt,name=context_lines_below,json=contextLinesBelow,proto3" json:"context_lines_below,omitempty"`
 	// Slice info (both kinds)
-	StartLine     int32     `protobuf:"varint,30,opt,name=start_line,json=startLine,proto3" json:"start_line,omitempty"`
-	EndLine       int32     `protobuf:"varint,31,opt,name=end_line,json=endLine,proto3" json:"end_line,omitempty"`
-	TotalLines    int32     `protobuf:"varint,32,opt,name=total_lines,json=totalLines,proto3" json:"total_lines,omitempty"`
-	ChunkIndex    int32     `protobuf:"varint,33,opt,name=chunk_index,json=chunkIndex,proto3" json:"chunk_index,omitempty"`
-	ChunkCount    int32     `protobuf:"varint,34,opt,name=chunk_count,json=chunkCount,proto3" json:"chunk_count,omitempty"`
-	Rows          []*GitRow `protobuf:"bytes,40,rep,name=rows,proto3" json:"rows,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	StartLine  int32     `protobuf:"varint,30,opt,name=start_line,json=startLine,proto3" json:"start_line,omitempty"`
+	EndLine    int32     `protobuf:"varint,31,opt,name=end_line,json=endLine,proto3" json:"end_line,omitempty"`
+	TotalLines int32     `protobuf:"varint,32,opt,name=total_lines,json=totalLines,proto3" json:"total_lines,omitempty"`
+	ChunkIndex int32     `protobuf:"varint,33,opt,name=chunk_index,json=chunkIndex,proto3" json:"chunk_index,omitempty"`
+	ChunkCount int32     `protobuf:"varint,34,opt,name=chunk_count,json=chunkCount,proto3" json:"chunk_count,omitempty"`
+	Rows       []*GitRow `protobuf:"bytes,40,rep,name=rows,proto3" json:"rows,omitempty"`
+	// Subset of output formats requested at scan submission. Copied
+	// from ScanRequest.output.formats by getter; scanner copies it on
+	// each emitted Finding so writer can filter sinks per-finding.
+	// Empty list = use writer's full enabled set.
+	OutputFormats []string `protobuf:"bytes,50,rep,name=output_formats,json=outputFormats,proto3" json:"output_formats,omitempty"`
+	// Number of surrounding lines the scanner should harvest into each
+	// Finding's context_before/context_after. Copied from
+	// ScanRequest.output.context_lines by getter. 0 = no context (default).
+	// Distinct from context_lines_above/below at 22/23, which describe
+	// DIFF_WINDOW reconstruction, not per-finding output shape.
+	OutputContextLines int32 `protobuf:"varint,51,opt,name=output_context_lines,json=outputContextLines,proto3" json:"output_context_lines,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GitRowChunk) Reset() {
@@ -310,6 +321,20 @@ func (x *GitRowChunk) GetRows() []*GitRow {
 	return nil
 }
 
+func (x *GitRowChunk) GetOutputFormats() []string {
+	if x != nil {
+		return x.OutputFormats
+	}
+	return nil
+}
+
+func (x *GitRowChunk) GetOutputContextLines() int32 {
+	if x != nil {
+		return x.OutputContextLines
+	}
+	return 0
+}
+
 type CommitFileRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CommitSha     []byte                 `protobuf:"bytes,1,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"` // raw SHA
@@ -380,7 +405,7 @@ const file_harporis_v1_types_proto_rawDesc = "" +
 	"lineNumber\x12\x1f\n" +
 	"\vbyte_offset\x18\x02 \x01(\x03R\n" +
 	"byteOffset\x12\x18\n" +
-	"\acontent\x18\x03 \x01(\fR\acontent\"\xea\x04\n" +
+	"\acontent\x18\x03 \x01(\fR\acontent\"\xc3\x05\n" +
 	"\vGitRowChunk\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12\x19\n" +
 	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12'\n" +
@@ -404,7 +429,9 @@ const file_harporis_v1_types_proto_rawDesc = "" +
 	"chunkIndex\x12\x1f\n" +
 	"\vchunk_count\x18\" \x01(\x05R\n" +
 	"chunkCount\x12'\n" +
-	"\x04rows\x18( \x03(\v2\x13.harporis.v1.GitRowR\x04rows\"`\n" +
+	"\x04rows\x18( \x03(\v2\x13.harporis.v1.GitRowR\x04rows\x12%\n" +
+	"\x0eoutput_formats\x182 \x03(\tR\routputFormats\x120\n" +
+	"\x14output_context_lines\x183 \x01(\x05R\x12outputContextLines\"`\n" +
 	"\rCommitFileRef\x12\x1d\n" +
 	"\n" +
 	"commit_sha\x18\x01 \x01(\fR\tcommitSha\x12\x12\n" +

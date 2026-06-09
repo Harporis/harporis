@@ -1,0 +1,69 @@
+# Production overlay for the Harporis stack. Use it on top of the base
+# `docker-compose.yml`:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
+#
+# What this overlay changes from dev:
+#
+#   - NATS uses TLS + JWT/nkey credentials instead of the static token.
+#     deploy/nats/nats-server.prod.conf is mounted; certs and the
+#     operator JWT come from $HARPORIS_NATS_CERT_DIR / $HARPORIS_NATS_AUTH_DIR
+#     on the host (must contain server-cert.pem, server-key.pem, ca.pem,
+#     operator.jwt).
+#   - All client services (getter/scanner/writer) point at `tls://nats:4222`
+#     and load creds + CA from `/etc/harporis/nats-auth/` (mounted RO).
+#   - The dev token is unset so a missing creds-file surfaces as a clean
+#     auth error instead of silently falling back to the dev secret.
+#
+# Required env vars (export or put in .env beside docker-compose.yml):
+#
+#   HARPORIS_NATS_CERT_DIR  /etc/ssl/harporis-nats   # contains server-cert.pem, server-key.pem, ca.pem
+#   HARPORIS_NATS_AUTH_DIR  /etc/harporis/nats-auth  # contains operator.jwt + client.creds
+#   HARPORIS_NATS_RESOLVER  MEMORY_RESOLVER body or URL string
+
+services:
+  nats:
+    command: ["-c", "/etc/nats/nats-server.prod.conf"]
+    environment:
+      # Server-side: paths inside the container.
+      NATS_TLS_CERT: "/etc/nats/certs/server-cert.pem"
+      NATS_TLS_KEY:  "/etc/nats/certs/server-key.pem"
+      NATS_TLS_CA:   "/etc/nats/certs/ca.pem"
+      NATS_OPERATOR_JWT: "/etc/nats/auth/operator.jwt"
+      NATS_RESOLVER: "${HARPORIS_NATS_RESOLVER}"
+      # Wipe the dev token so it can't be used by accident.
+      NATS_TOKEN: ""
+    volumes:
+      - ./deploy/nats/nats-server.prod.conf:/etc/nats/nats-server.prod.conf:ro
+      - ${HARPORIS_NATS_CERT_DIR}:/etc/nats/certs:ro
+      - ${HARPORIS_NATS_AUTH_DIR}:/etc/nats/auth:ro
+    healthcheck:
+      # /healthz is auth-free, but speaks TLS now. Match scheme + CA.
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O- https://localhost:8222/healthz | grep -q '\"status\":\"ok\"'"]
+
+  getter:
+    environment:
+      NATS_URL: "tls://nats:4222"
+      NATS_TOKEN: ""
+      NATS_CREDS_FILE: "/etc/harporis/nats-auth/client.creds"
+      NATS_ROOT_CAS:   "/etc/harporis/nats-auth/ca.pem"
+    volumes:
+      - ${HARPORIS_NATS_AUTH_DIR}:/etc/harporis/nats-auth:ro
+
+  scanner:
+    environment:
+      NATS_URL: "tls://nats:4222"
+      NATS_TOKEN: ""
+      NATS_CREDS_FILE: "/etc/harporis/nats-auth/client.creds"
+      NATS_ROOT_CAS:   "/etc/harporis/nats-auth/ca.pem"
+    volumes:
+      - ${HARPORIS_NATS_AUTH_DIR}:/etc/harporis/nats-auth:ro
+
+  writer:
+    environment:
+      NATS_URL: "tls://nats:4222"
+      NATS_TOKEN: ""
+      NATS_CREDS_FILE: "/etc/harporis/nats-auth/client.creds"
+      NATS_ROOT_CAS:   "/etc/harporis/nats-auth/ca.pem"
+    volumes:
+      - ${HARPORIS_NATS_AUTH_DIR}:/etc/harporis/nats-auth:ro

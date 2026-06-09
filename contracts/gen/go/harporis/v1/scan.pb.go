@@ -378,9 +378,20 @@ func (*Source_LocalPath) isSource_Src() {}
 func (*Source_Remote) isSource_Src() {}
 
 type OutputConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
-	Params        map[string]string      `protobuf:"bytes,2,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Kind   string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	Params map[string]string      `protobuf:"bytes,2,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Per-scan subset of writer output formats. Each element is a short
+	// name matched against the writer's enabled sinks (e.g. "ndjson",
+	// "sarif", "html", "xlsx", "pdf"). Empty list = writer's default
+	// (all enabled sinks fire), so existing callers keep working.
+	Formats []string `protobuf:"bytes,3,rep,name=formats,proto3" json:"formats,omitempty"`
+	// Number of lines BEFORE and AFTER each finding's matched range that
+	// the scanner should harvest into Finding.context_before / context_after.
+	// 0 = no context (default; back-compat). Capped server-side to 100 to
+	// bound payload size. Distinct from GitRowChunk.context_lines_above/
+	// below, which is about DIFF_WINDOW reconstruction, not report shape.
+	ContextLines  int32 `protobuf:"varint,4,opt,name=context_lines,json=contextLines,proto3" json:"context_lines,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -427,6 +438,20 @@ func (x *OutputConfig) GetParams() map[string]string {
 		return x.Params
 	}
 	return nil
+}
+
+func (x *OutputConfig) GetFormats() []string {
+	if x != nil {
+		return x.Formats
+	}
+	return nil
+}
+
+func (x *OutputConfig) GetContextLines() int32 {
+	if x != nil {
+		return x.ContextLines
+	}
+	return 0
 }
 
 type ConfigOverride struct {
@@ -599,10 +624,12 @@ const file_harporis_v1_scan_proto_rawDesc = "" +
 	"\n" +
 	"local_path\x18\x01 \x01(\tH\x00R\tlocalPath\x121\n" +
 	"\x06remote\x18\x02 \x01(\v2\x17.harporis.v1.RemoteRepoH\x00R\x06remoteB\x05\n" +
-	"\x03src\"\x9c\x01\n" +
+	"\x03src\"\xdb\x01\n" +
 	"\fOutputConfig\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12=\n" +
-	"\x06params\x18\x02 \x03(\v2%.harporis.v1.OutputConfig.ParamsEntryR\x06params\x1a9\n" +
+	"\x06params\x18\x02 \x03(\v2%.harporis.v1.OutputConfig.ParamsEntryR\x06params\x12\x18\n" +
+	"\aformats\x18\x03 \x03(\tR\aformats\x12#\n" +
+	"\rcontext_lines\x18\x04 \x01(\x05R\fcontextLines\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x84\x01\n" +

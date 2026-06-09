@@ -17,6 +17,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	kitscan "github.com/Harporis/harporis/kit/scan"
 
 	"github.com/Harporis/harporis/services/getter/internal/config"
 	"github.com/Harporis/harporis/services/getter/internal/filter"
@@ -30,7 +31,7 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "config/getter.yaml", "path to YAML config")
-	metricsPort := flag.Int("metrics-port", 9100, "Prometheus /metrics port")
+	metricsPort := flag.Int("metrics-port", wire.MetricsPorts[wire.ServiceGetter], "Prometheus /metrics port")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -50,7 +51,13 @@ func main() {
 	rootCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	cl, err := wire.Dial(wire.DialConfig{URL: cfg.NATS.URL, ClientName: "harporis-getter"})
+	cl, err := wire.Dial(wire.DialConfig{
+		URL:        cfg.NATS.URL,
+		Token:      cfg.NATS.Token,
+		CredsFile:  cfg.NATS.CredsFile,
+		RootCAs:    cfg.NATS.RootCAs,
+		ClientName: "harporis-getter",
+	})
 	if err != nil {
 		fatal("nats dial: %v", err)
 	}
@@ -121,7 +128,7 @@ func main() {
 
 func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Registry) func(context.Context, *v1.ScanRequest) error {
 	return func(ctx context.Context, req *v1.ScanRequest) error {
-		if err := scan.ValidateScanID(req.ScanId); err != nil {
+		if err := kitscan.ValidateScanID(req.ScanId); err != nil {
 			return fmt.Errorf("reject scan request: %w", err)
 		}
 		walkMode := walkModeFromProto(req.Type)

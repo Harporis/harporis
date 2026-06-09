@@ -90,6 +90,7 @@ type ScanMetrics struct {
 	BytesPublished  int64                  `protobuf:"varint,4,opt,name=bytes_published,json=bytesPublished,proto3" json:"bytes_published,omitempty"`
 	ErrorsTotal     int64                  `protobuf:"varint,5,opt,name=errors_total,json=errorsTotal,proto3" json:"errors_total,omitempty"`
 	DurationMs      int64                  `protobuf:"varint,6,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	SecretsFound    int64                  `protobuf:"varint,7,opt,name=secrets_found,json=secretsFound,proto3" json:"secrets_found,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -162,6 +163,13 @@ func (x *ScanMetrics) GetErrorsTotal() int64 {
 func (x *ScanMetrics) GetDurationMs() int64 {
 	if x != nil {
 		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *ScanMetrics) GetSecretsFound() int64 {
+	if x != nil {
+		return x.SecretsFound
 	}
 	return 0
 }
@@ -306,7 +314,7 @@ var File_harporis_v1_events_proto protoreflect.FileDescriptor
 
 const file_harporis_v1_events_proto_rawDesc = "" +
 	"\n" +
-	"\x18harporis/v1/events.proto\x12\vharporis.v1\x1a\x16harporis/v1/scan.proto\"\xef\x01\n" +
+	"\x18harporis/v1/events.proto\x12\vharporis.v1\x1a\x16harporis/v1/scan.proto\"\x94\x02\n" +
 	"\vScanMetrics\x12#\n" +
 	"\rblobs_scanned\x18\x01 \x01(\x03R\fblobsScanned\x12#\n" +
 	"\rblobs_skipped\x18\x02 \x01(\x03R\fblobsSkipped\x12)\n" +
@@ -314,7 +322,8 @@ const file_harporis_v1_events_proto_rawDesc = "" +
 	"\x0fbytes_published\x18\x04 \x01(\x03R\x0ebytesPublished\x12!\n" +
 	"\ferrors_total\x18\x05 \x01(\x03R\verrorsTotal\x12\x1f\n" +
 	"\vduration_ms\x18\x06 \x01(\x03R\n" +
-	"durationMs\"\x80\x02\n" +
+	"durationMs\x12#\n" +
+	"\rsecrets_found\x18\a \x01(\x03R\fsecretsFound\"\x80\x02\n" +
 	"\vStatusEvent\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12,\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x16.harporis.v1.ScanStateR\x05state\x12\x1c\n" +

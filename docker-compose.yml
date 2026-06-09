@@ -1,8 +1,14 @@
-# Local dev stack: NATS (JetStream) + Harporis getter, both in containers.
-# The CLI runs on the host and talks to NATS at localhost:4222.
+# Local dev stack: NATS (JetStream) + Harporis getter + Harporis scanner.
+# All three are containerized. The CLI runs on the host and talks to NATS
+# at localhost:4222.
 #
-# Bring up:    docker compose up --build -d
-# Tear down:   docker compose down -v
+# One-command bring up:
+#     make stack-up              # or: docker compose up --build -d --wait
+# Tear down:
+#     make stack-down            # or: docker compose down -v
+#
+# Horizontal scaling (any service supports --scale N):
+#     docker compose up -d --scale scanner=4 --scale getter=2
 #
 # Scan a host repo with the CLI:
 #   1) Add a volume by creating docker-compose.override.yml (gitignored):
@@ -20,12 +26,20 @@ services:
   nats:
     image: nats:2.10-alpine
     container_name: harporis-nats
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    # Config-file mode (replaces the inline -js -sd flags of v0.1) so token
+    # auth can be plumbed in. The conf does `authorization { token:
+    # $NATS_TOKEN }` and nats-server substitutes the env var at startup.
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    environment:
+      # Default keeps `docker compose up` working out of the box; rotate
+      # by exporting NATS_TOKEN in your shell or via .env.
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
     ports:
       - "4222:4222"   # client
       - "8222:8222"   # monitoring + /healthz
     volumes:
       - nats-data:/data
+      - ./deploy/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
     healthcheck:
       # The default nats image is scratch-based (no shell, no wget). The
       # -alpine variant has wget; the /healthz endpoint is the canonical
@@ -42,24 +56,124 @@ services:
       context: .
       dockerfile: services/getter/Dockerfile
     image: harporis/getter:dev
-    container_name: harporis-getter
+    depends_on:
+      nats:
+        condition: service_healthy
+    # Run as the host user so the read-only $HOME bind-mount below is
+    # actually traversable (most home dirs are mode 700, so a container
+    # running as a different uid hits permission-denied on the very
+    # first stat). UID/GID default to 1000/1000 if the env vars aren't
+    # set (typical: `make stack-up` exports them; CI may need to too).
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
+      LOG_LEVEL: info
+      WORK_DIR: /var/lib/harporis/scans
+    expose:
+      - "9100"
+      - "50051"
+    tmpfs:
+      # mode=1777 = sticky-bit + world-rwx (same shape as /tmp). The
+      # default tmpfs mount is owned by root:root with mode=755 — the
+      # getter runs as uid=100 (harporis), so without this it cannot
+      # create per-scan clone dirs. Local-path scans never hit this
+      # because they don't clone; remote-url scans do.
+      - /var/lib/harporis/scans:mode=1777
+    volumes:
+      # Operator's $HOME is bind-mounted read-only into /host so
+      # `harporis scan --local <path-under-$HOME>` works without a
+      # docker-compose.override.yml dance. CLI translates host paths
+      # under $HOME to /host/<remainder> before submitting. Read-only
+      # is enforced both here (`:ro`) and by getter being inherently
+      # a reader. Paths outside $HOME still require an override file
+      # (or the explicit `--no-mount-host` opt-out).
+      - "${HOME}:/host:ro"
+    healthcheck:
+      # TCP probe via busybox nc (in the alpine runtime image). Confirms
+      # the /metrics + gRPC ports are listening; doesn't assert payload
+      # content but is enough to gate `docker compose up --wait` and to
+      # surface a hung process.
+      test: ["CMD", "nc", "-z", "localhost", "9100"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+
+  scanner:
+    build:
+      context: .
+      dockerfile: services/scanner/Dockerfile
+    image: harporis/scanner:dev
     depends_on:
       nats:
         condition: service_healthy
     environment:
       NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
       LOG_LEVEL: info
-      WORK_DIR: /var/lib/harporis/scans
-    ports:
-      - "9100:9100"    # Prometheus /metrics
-      - "50051:50051"  # gRPC Health
+      # External rules path the scanner watches for hot-reload. Operators
+      # edit ./services/scanner/rules/default.yaml on the host; the
+      # scanner picks up the change within ~5s without restart and
+      # applies it to subsequent scans.
+      HARPORIS_RULES_PATH: /etc/harporis/rules/default.yaml
     volumes:
-      - getter-work:/var/lib/harporis/scans
-      # Host repos to scan go in docker-compose.override.yml — see the
-      # comment block at the top of this file. Do not hardcode host
-      # paths here; they vary per developer.
+      - "./services/scanner/rules:/etc/harporis/rules:ro"
+    expose:
+      - "9101"
+    healthcheck:
+      # Same TCP probe pattern as getter. 9101 only opens AFTER metrics
+      # ServeAsync runs near the end of main(), so this also reads as a
+      # rough readiness signal.
+      test: ["CMD", "nc", "-z", "localhost", "9101"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+
+  writer:
+    build:
+      context: .
+      dockerfile: services/writer/Dockerfile
+    image: harporis/writer:dev
+    depends_on:
+      nats:
+        condition: service_healthy
+    # Run as the host user so findings/ on the host bind-mount is
+    # writable AND files land owned by the operator (not uid 100). Same
+    # pattern getter uses for the read-only $HOME mount.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
+      LOG_LEVEL: info
+    expose:
+      - "9102"
+    volumes:
+      # Findings land on the host filesystem directly. Default is
+      # ./findings (next to docker-compose.yml); override with
+      # HARPORIS_FINDINGS_DIR for a different host location, e.g.:
+      #   HARPORIS_FINDINGS_DIR=/srv/audit/harporis docker compose up
+      # An absolute host path is recommended; a relative path is
+      # resolved relative to the compose file directory.
+      - "${HARPORIS_FINDINGS_DIR:-./findings}:/var/lib/harporis/findings"
+    healthcheck:
+      # Same TCP-probe pattern as the other services. 9102 opens after
+      # metrics.ServeAsync runs, so this doubles as a readiness signal.
+      test: ["CMD", "nc", "-z", "localhost", "9102"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+    deploy:
+      replicas: 1
     restart: unless-stopped
 
 volumes:
   nats-data:
-  getter-work:

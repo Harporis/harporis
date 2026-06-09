@@ -10,6 +10,14 @@ type BuilderConfig struct {
 	RowSizeTargetBytes int
 	OverlapLines       int
 	ScanID             string
+	// OutputFormats is the optional subset of writer output formats
+	// requested at scan submission (from ScanRequest.output.formats).
+	// Empty means writer's default — all enabled sinks fire.
+	OutputFormats []string
+	// OutputContextLines is the number of surrounding lines the scanner
+	// should harvest into each Finding (copied from
+	// ScanRequest.output.context_lines). 0 = no context (default).
+	OutputContextLines int32
 }
 
 type Source struct {
@@ -91,13 +99,15 @@ func (b *Builder) Finish() ([]*v1.GitRowChunk, error) {
 func (b *Builder) emit(final bool) {
 	rows := append([]*v1.GitRow(nil), b.pending...)
 	ch := &v1.GitRowChunk{
-		ScanId:         b.cfg.ScanID,
-		ChunkId:        uuid.NewString(),
-		SequenceNumber: int64(len(b.chunks)), // global seq assigned by caller pipeline later
-		Kind:           b.src.Kind,
-		Rows:           rows,
-		StartLine:      rows[0].LineNumber,
-		EndLine:        rows[len(rows)-1].LineNumber,
+		ScanId:             b.cfg.ScanID,
+		ChunkId:            uuid.NewString(),
+		SequenceNumber:     int64(len(b.chunks)), // global seq assigned by caller pipeline later
+		Kind:               b.src.Kind,
+		Rows:               rows,
+		StartLine:          rows[0].LineNumber,
+		EndLine:            rows[len(rows)-1].LineNumber,
+		OutputFormats:      b.cfg.OutputFormats,
+		OutputContextLines: b.cfg.OutputContextLines,
 	}
 	switch b.src.Kind {
 	case v1.ChunkKind_BLOB:

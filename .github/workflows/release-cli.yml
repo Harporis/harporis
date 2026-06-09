@@ -1,0 +1,45 @@
+# Release workflow for the harporis CLI binary.
+#
+# Triggers on tags shaped `cli/vX.Y.Z`. Uses goreleaser to cross-build
+# linux/{amd64,arm64} + darwin/{amd64,arm64}, package each as a
+# tar.gz with completion files + LICENSE + README, generate a
+# checksum file, and publish a GitHub Release.
+name: release-cli
+
+on:
+  push:
+    tags:
+      - "cli/v*"
+
+permissions:
+  contents: write   # required for goreleaser to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          # goreleaser walks `git log` for the changelog; fetch the full
+          # history so it can find the previous cli/v* tag.
+          fetch-depth: 0
+
+      - name: setup-go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: |
+            **/go.sum
+
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          # Use the in-repo .goreleaser.yaml.
+          args: release --clean
+        env:
+          # Default GITHUB_TOKEN works for releases on the same repo.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

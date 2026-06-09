@@ -1,0 +1,19 @@
+# PersistentVolumeClaim for the writer's findings output. Size accordingly
+# for retention horizon × scan volume × avg finding bytes. Default 10Gi is
+# plenty for hundreds of scans × hundreds of findings each.
+#
+# Replace storageClassName with one available in your cluster
+# (e.g. `standard`, `gp3`, `longhorn`, etc.) before applying.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: harporis-writer-findings
+  labels:
+    app: harporis-writer
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: standard

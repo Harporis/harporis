@@ -5,6 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Harporis/harporis/kit/nats/wire"
+	"github.com/Harporis/harporis/services/cli/internal/compose"
 	"github.com/Harporis/harporis/services/cli/internal/doctor"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 	"github.com/Harporis/harporis/services/cli/internal/version"
@@ -24,7 +26,13 @@ func newDoctorCmd() *cobra.Command {
 				doctor.DockerCheck{},
 				doctor.ComposeCheck{},
 				doctor.NATSCheck{URL: natsURL},
-				doctor.GetterHealthCheck{},
+			}
+			if co, err := compose.NewDefault(); err == nil {
+				for _, svc := range wire.Services() {
+					checks = append(checks, doctor.ContainerMetricsCheck{
+						Service: svc, Port: wire.MetricsPorts[svc], Exec: co,
+					})
+				}
 			}
 			results := doctor.RunAll(checks)
 			t := ui.NewTable("CHECK", "RESULT", "DETAIL")

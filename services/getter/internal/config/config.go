@@ -55,6 +55,9 @@ type FiltersConfig struct {
 
 type NATSConfig struct {
 	URL        string             `yaml:"url"`
+	Token      string             `yaml:"token"`
+	CredsFile  string             `yaml:"creds_file"` // path to JWT/nkey creds for production
+	RootCAs    string             `yaml:"root_cas"`   // path to PEM bundle for TLS
 	JetStream  JetStreamConfig    `yaml:"jetstream"`
 	Consumer   ConsumerConfig     `yaml:"consumer"`
 }

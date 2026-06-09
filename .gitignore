@@ -42,3 +42,7 @@ services/cli/completions/
 
 # Local docker-compose extensions (per-developer repo mounts, etc.)
 docker-compose.override.yml
+
+# Findings written by the writer service to the host bind-mount.
+# Override location with HARPORIS_FINDINGS_DIR.
+/findings/

@@ -45,6 +45,19 @@ message Source {
 message OutputConfig {
   string              kind   = 1;
   map<string, string> params = 2;
+
+  // Per-scan subset of writer output formats. Each element is a short
+  // name matched against the writer's enabled sinks (e.g. "ndjson",
+  // "sarif", "html", "xlsx", "pdf"). Empty list = writer's default
+  // (all enabled sinks fire), so existing callers keep working.
+  repeated string formats = 3;
+
+  // Number of lines BEFORE and AFTER each finding's matched range that
+  // the scanner should harvest into Finding.context_before / context_after.
+  // 0 = no context (default; back-compat). Capped server-side to 100 to
+  // bound payload size. Distinct from GitRowChunk.context_lines_above/
+  // below, which is about DIFF_WINDOW reconstruction, not report shape.
+  int32 context_lines = 4;
 }
 
 message ConfigOverride {

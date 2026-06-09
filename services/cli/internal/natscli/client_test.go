@@ -40,6 +40,24 @@ func TestDialAndEnsureStreams(t *testing.T) {
 	t.Fatal("nats not connected within deadline")
 }
 
+func TestIsLocalhost(t *testing.T) {
+	cases := map[string]bool{
+		"nats://localhost:4222":    true,
+		"nats://127.0.0.1:4222":    true,
+		"nats://[::1]:4222":        true,
+		"nats://nats.prod.io:4222": false,
+		"nats://192.168.1.10:4222": false,
+		"tls://localhost:4222":     true,
+		"":                         true, // url.Parse("") returns empty host; default URL fallback
+		"://broken":                false,
+	}
+	for in, want := range cases {
+		if got := isLocalhost(in); got != want {
+			t.Errorf("isLocalhost(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestSanitizeConsumerName(t *testing.T) {
 	cases := map[string]string{
 		"abc-123":         "abc-123",

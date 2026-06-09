@@ -46,6 +46,39 @@ type Runner struct {
 	scanCtx *Context
 }
 
+// outputFormats returns the per-scan format subset (from
+// ScanRequest.output.formats) or nil if the caller didn't specify
+// any. Builder propagates the slice onto each emitted chunk so
+// scanner and writer can filter sinks downstream.
+func (r *Runner) outputFormats() []string {
+	if r.cfg.Output == nil {
+		return nil
+	}
+	return r.cfg.Output.Formats
+}
+
+// maxFindingContextLines bounds how many surrounding lines the
+// scanner is asked to harvest per finding, regardless of what the
+// operator requested. Keeps NDJSON payloads + writer-side accumulator
+// memory predictable; PDF/HTML cards readable.
+const maxFindingContextLines = 100
+
+// outputContextLines returns the per-scan N (lines before/after each
+// finding) clamped to [0, maxFindingContextLines]. 0 = no context.
+func (r *Runner) outputContextLines() int32 {
+	if r.cfg.Output == nil {
+		return 0
+	}
+	n := r.cfg.Output.ContextLines
+	if n < 0 {
+		return 0
+	}
+	if n > maxFindingContextLines {
+		return maxFindingContextLines
+	}
+	return n
+}
+
 func NewRunner(cfg RunnerConfig) *Runner {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 1
@@ -206,6 +239,8 @@ func (r *Runner) processBlob(ctx context.Context, batch *git.Batch, job git.Blob
 		ScanID:             r.cfg.ScanID,
 		RowSizeTargetBytes: r.cfg.RowSizeTargetBytes,
 		OverlapLines:       r.cfg.OverlapLines,
+		OutputFormats:      r.outputFormats(),
+		OutputContextLines: r.outputContextLines(),
 	})
 	shaBytes, err := hex.DecodeString(job.SHA)
 	if err != nil {
@@ -302,6 +337,8 @@ func (r *Runner) publishDiffPatch(ctx context.Context, commitSHA []byte, p git.P
 			ScanID:             r.cfg.ScanID,
 			RowSizeTargetBytes: r.cfg.RowSizeTargetBytes,
 			OverlapLines:       r.cfg.OverlapLines,
+			OutputFormats:      r.outputFormats(),
+			OutputContextLines: r.outputContextLines(),
 		})
 		builder.Begin(chunk.DiffWindowSource(commitSHA, p.Path,
 			int32(r.cfg.DiffContextLines), int32(r.cfg.DiffContextLines)))

@@ -1,0 +1,13 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: harporis-writer
+  labels:
+    app: harporis-writer
+spec:
+  selector:
+    matchLabels:
+      app: harporis-writer
+  endpoints:
+    - port: metrics
+      interval: 15s

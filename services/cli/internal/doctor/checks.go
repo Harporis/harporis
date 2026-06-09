@@ -3,7 +3,7 @@ package doctor
 
 import (
 	"context"
-	"net/http"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -90,19 +90,40 @@ func (n NATSCheck) Run(_ context.Context) Result {
 	return Result{Name: n.Name(), OK: true, Detail: n.URL}
 }
 
-// GetterHealthCheck hits /metrics on localhost:9100.
-type GetterHealthCheck struct{}
+// Execer runs a command inside a compose service container. Satisfied by
+// *compose.Compose; local interface so the doctor package can be tested
+// without importing the real compose runner.
+type Execer interface {
+	Exec(ctx context.Context, service string, cmd ...string) (string, error)
+}
 
-func (GetterHealthCheck) Name() string { return "getter /metrics" }
-func (GetterHealthCheck) Run(ctx context.Context) Result {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:9100/metrics", nil)
-	resp, err := http.DefaultClient.Do(req)
+// ContainerMetricsCheck probes a service's /metrics endpoint from inside
+// the container via `docker compose exec <svc> wget -qO- localhost:<port>/metrics`.
+// This works under `docker compose up --scale N` (where ports aren't
+// published to the host) and replaces the prior host-side localhost probe.
+type ContainerMetricsCheck struct {
+	Service string
+	Port    int
+	Exec    Execer
+}
+
+func (c ContainerMetricsCheck) Name() string { return c.Service + " /metrics" }
+
+func (c ContainerMetricsCheck) Run(ctx context.Context) Result {
+	url := fmt.Sprintf("http://localhost:%d/metrics", c.Port)
+	out, err := c.Exec.Exec(ctx, c.Service, "wget", "-qO-", url)
 	if err != nil {
-		return Result{Name: "getter /metrics", OK: false, Detail: err.Error()}
+		// out is wget's combined stderr+stdout — usually carries the
+		// real reason ("wget: server returned 5xx", "name does not
+		// resolve"). Prefer it over the bare exit status.
+		detail := strings.TrimSpace(out)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return Result{Name: c.Name(), OK: false, Detail: detail}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return Result{Name: "getter /metrics", OK: false, Detail: "non-200 status"}
+	if !strings.Contains(out, "# HELP") && !strings.Contains(out, "# TYPE") {
+		return Result{Name: c.Name(), OK: false, Detail: "response not in Prometheus exposition format"}
 	}
-	return Result{Name: "getter /metrics", OK: true, Detail: "HTTP 200"}
+	return Result{Name: c.Name(), OK: true, Detail: "via docker compose exec " + c.Service}
 }
