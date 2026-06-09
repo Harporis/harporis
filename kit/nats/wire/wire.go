@@ -153,16 +153,44 @@ func (c *Client) Close() {
 // any service at startup; concurrent calls from multiple processes are fine
 // because AddStream is idempotent on identical config and we tolerate
 // "name already in use" errors.
+//
+// Bounded growth notes:
+//   - REQUESTS / CHUNKS / FINDINGS are WorkQueuePolicy → messages
+//     delete on first successful Ack. A backstop MaxBytes is set on
+//     each so a stuck consumer + producer pressure can't fill the
+//     disk; DiscardOld means oldest unacked is dropped at the cap
+//     (preferable to publish failure on the producer side).
+//   - STATUS is LimitsPolicy (every replica wants to read it; no Ack
+//     deletes it). Set BOTH MaxAge (rolling window) and MaxBytes
+//     (hard cap) so an operator who runs scans nonstop for months
+//     doesn't silently fill the NATS volume.
+//
+// streamConfigDrifted compares these fields, so existing deployments
+// pick the new limits up on the next service start.
+const (
+	// StatusMaxAge keeps ~a week of historical status events for
+	// post-mortem on recent scans. Tune via wire.go if you need more.
+	StatusMaxAge = 7 * 24 * time.Hour
+	// StatusMaxBytes is a hard cap on disk used by the status stream.
+	// 512 MiB at ~200 B/event ≈ 2.6M events ≈ tens of thousands of
+	// scans depending on chunk count.
+	StatusMaxBytes = 512 * 1024 * 1024
+	// WorkQueueMaxBytes bounds REQUESTS / CHUNKS / FINDINGS at 2 GiB
+	// each so a wedged consumer can't fill the NATS volume during a
+	// large scan or a burst of submissions.
+	WorkQueueMaxBytes = 2 * 1024 * 1024 * 1024
+)
+
 func EnsureStreams(js nats.JetStreamContext) error {
 	configs := []*nats.StreamConfig{
 		// RequestsStream captures ONLY the requests subject. CancelSubject is
 		// intentionally not in the filter: cancel is a fire-and-forget broadcast
 		// over core NATS, and a WorkQueuePolicy stream with no matching
 		// subscriber would let cancels accumulate without bound.
-		{Name: RequestsStream, Subjects: []string{ScansRequestsSubject}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
-		{Name: ChunksStream, Subjects: []string{"harporis.chunks.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy},
-		{Name: StatusStream, Subjects: []string{"harporis.status.>"}, Storage: nats.FileStorage, Retention: nats.LimitsPolicy},
-		{Name: FindingsStream, Subjects: []string{"harporis.findings.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, Duplicates: 5 * time.Minute},
+		{Name: RequestsStream, Subjects: []string{ScansRequestsSubject}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, MaxBytes: WorkQueueMaxBytes, Discard: nats.DiscardOld},
+		{Name: ChunksStream, Subjects: []string{"harporis.chunks.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, MaxBytes: WorkQueueMaxBytes, Discard: nats.DiscardOld},
+		{Name: StatusStream, Subjects: []string{"harporis.status.>"}, Storage: nats.FileStorage, Retention: nats.LimitsPolicy, MaxAge: StatusMaxAge, MaxBytes: StatusMaxBytes, Discard: nats.DiscardOld},
+		{Name: FindingsStream, Subjects: []string{"harporis.findings.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, Duplicates: 5 * time.Minute, MaxBytes: WorkQueueMaxBytes, Discard: nats.DiscardOld},
 	}
 	for _, c := range configs {
 		if _, err := js.AddStream(c); err == nil {
@@ -198,6 +226,15 @@ func streamConfigDrifted(have, want nats.StreamConfig) bool {
 		return true
 	}
 	if have.Duplicates != want.Duplicates {
+		return true
+	}
+	if have.MaxAge != want.MaxAge {
+		return true
+	}
+	if have.MaxBytes != want.MaxBytes {
+		return true
+	}
+	if have.Discard != want.Discard {
 		return true
 	}
 	if !subjectsEqual(have.Subjects, want.Subjects) {

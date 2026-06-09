@@ -131,6 +131,79 @@ func TestEnsureStreams_UpdatesExistingStreamConfig(t *testing.T) {
 	}
 }
 
+func TestEnsureStreams_StatusHasMaxAgeAndMaxBytes(t *testing.T) {
+	s := runJSServer(t)
+	cl := dial(t, s)
+
+	if err := wire.EnsureStreams(cl.JS); err != nil {
+		t.Fatalf("EnsureStreams: %v", err)
+	}
+	info, err := cl.JS.StreamInfo(wire.StatusStream)
+	if err != nil {
+		t.Fatalf("StreamInfo: %v", err)
+	}
+	if info.Config.MaxAge != wire.StatusMaxAge {
+		t.Errorf("StatusStream.MaxAge = %v, want %v", info.Config.MaxAge, wire.StatusMaxAge)
+	}
+	if info.Config.MaxBytes != wire.StatusMaxBytes {
+		t.Errorf("StatusStream.MaxBytes = %d, want %d", info.Config.MaxBytes, wire.StatusMaxBytes)
+	}
+	if info.Config.Discard != nats.DiscardOld {
+		t.Errorf("StatusStream.Discard = %v, want DiscardOld", info.Config.Discard)
+	}
+}
+
+func TestEnsureStreams_WorkQueueStreamsHaveMaxBytes(t *testing.T) {
+	s := runJSServer(t)
+	cl := dial(t, s)
+
+	if err := wire.EnsureStreams(cl.JS); err != nil {
+		t.Fatalf("EnsureStreams: %v", err)
+	}
+	for _, name := range []string{wire.RequestsStream, wire.ChunksStream, wire.FindingsStream} {
+		info, err := cl.JS.StreamInfo(name)
+		if err != nil {
+			t.Fatalf("StreamInfo %s: %v", name, err)
+		}
+		if info.Config.MaxBytes != wire.WorkQueueMaxBytes {
+			t.Errorf("%s.MaxBytes = %d, want %d", name, info.Config.MaxBytes, wire.WorkQueueMaxBytes)
+		}
+		if info.Config.Discard != nats.DiscardOld {
+			t.Errorf("%s.Discard = %v, want DiscardOld", name, info.Config.Discard)
+		}
+	}
+}
+
+// Migration: an existing stream with no MaxAge / MaxBytes (pre-v0.4.1
+// shape) must be updated when EnsureStreams runs against it.
+func TestEnsureStreams_MigratesStatusStreamLimits(t *testing.T) {
+	s := runJSServer(t)
+	cl := dial(t, s)
+
+	_, err := cl.JS.AddStream(&nats.StreamConfig{
+		Name:      wire.StatusStream,
+		Subjects:  []string{"harporis.status.>"},
+		Storage:   nats.FileStorage,
+		Retention: nats.LimitsPolicy,
+		// No MaxAge / MaxBytes / Discard — simulates the unbounded
+		// shape that v0.1 → v0.4 stacks created.
+	})
+	if err != nil {
+		t.Fatalf("pre-create StatusStream: %v", err)
+	}
+
+	if err := wire.EnsureStreams(cl.JS); err != nil {
+		t.Fatalf("EnsureStreams (migrate): %v", err)
+	}
+	info, _ := cl.JS.StreamInfo(wire.StatusStream)
+	if info.Config.MaxAge != wire.StatusMaxAge {
+		t.Errorf("after migrate, MaxAge = %v, want %v", info.Config.MaxAge, wire.StatusMaxAge)
+	}
+	if info.Config.MaxBytes != wire.StatusMaxBytes {
+		t.Errorf("after migrate, MaxBytes = %d, want %d", info.Config.MaxBytes, wire.StatusMaxBytes)
+	}
+}
+
 func TestScannerDurableConsumerConst(t *testing.T) {
 	if wire.ScannerDurableConsumer != "scanner-pool" {
 		t.Errorf("ScannerDurableConsumer = %q, want %q", wire.ScannerDurableConsumer, "scanner-pool")
