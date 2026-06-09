@@ -1,6 +1,18 @@
-// Package sink defines the writer's output destinations. v0.1 ships one
-// implementation: NDJSON file-per-scan, suitable for piping through `jq`
-// or post-processing tools. SARIF and other sinks are deferred to v0.2.
+// Package sink defines the writer's output destinations. Six concrete
+// sinks ship out of the box, all sharing the Sink interface defined
+// below:
+//
+//	NDJSON   one Finding per line; append-only file-per-scan; jq-friendly
+//	SARIF    SARIF v2.1.0 report for IDE / code-scanning integrations
+//	HTML     self-contained browser report with inline sort + filter
+//	XLSX     Excel workbook with Findings + Summary sheets
+//	PDF      printable A4 report (pure-Go fonts, no system deps)
+//	Parquet  columnar workbook for SIEM / data-warehouse ingestion
+//
+// NDJSON is the only sink that streams; the other five accumulate
+// findings in memory per scan_id and rewrite their file atomically
+// (tempfile + os.Rename) on every Write so a partial scan is always
+// a parseable report.
 package sink
 
 import (

@@ -104,7 +104,7 @@ func main() {
 		sinks = append(sinks, pq)
 	}
 	if len(sinks) == 0 {
-		fatal("no sinks enabled — set ndjson_enabled or sarif_enabled to true")
+		fatal("no sinks enabled — set at least one of ndjson_enabled, sarif_enabled, html_enabled, xlsx_enabled, pdf_enabled, parquet_enabled to true in writer.yaml")
 	}
 
 	// Sweep orphaned tempfiles from prior crashes mid-flush. The
