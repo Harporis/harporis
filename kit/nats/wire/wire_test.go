@@ -210,6 +210,46 @@ func TestScannerDurableConsumerConst(t *testing.T) {
 	}
 }
 
+func TestEnsureStreams_EnvOverridesRetention(t *testing.T) {
+	t.Setenv(wire.EnvStatusRetentionAge, "1h")
+	t.Setenv(wire.EnvStatusRetentionMaxBytes, "1048576")
+	t.Setenv(wire.EnvWorkQueueMaxBytes, "2097152")
+
+	s := runJSServer(t)
+	cl := dial(t, s)
+
+	if err := wire.EnsureStreams(cl.JS); err != nil {
+		t.Fatalf("EnsureStreams: %v", err)
+	}
+	st, _ := cl.JS.StreamInfo(wire.StatusStream)
+	if st.Config.MaxAge != time.Hour {
+		t.Errorf("StatusStream.MaxAge = %v, want 1h", st.Config.MaxAge)
+	}
+	if st.Config.MaxBytes != 1<<20 {
+		t.Errorf("StatusStream.MaxBytes = %d, want 1MiB", st.Config.MaxBytes)
+	}
+	wq, _ := cl.JS.StreamInfo(wire.RequestsStream)
+	if wq.Config.MaxBytes != 1<<21 {
+		t.Errorf("RequestsStream.MaxBytes = %d, want 2MiB", wq.Config.MaxBytes)
+	}
+}
+
+func TestEnsureStreams_InvalidEnvFallsBackToDefaults(t *testing.T) {
+	t.Setenv(wire.EnvStatusRetentionAge, "not-a-duration")
+	t.Setenv(wire.EnvStatusRetentionMaxBytes, "negative-please")
+
+	s := runJSServer(t)
+	cl := dial(t, s)
+
+	if err := wire.EnsureStreams(cl.JS); err != nil {
+		t.Fatalf("EnsureStreams: %v", err)
+	}
+	st, _ := cl.JS.StreamInfo(wire.StatusStream)
+	if st.Config.MaxAge != wire.StatusMaxAge {
+		t.Errorf("MaxAge = %v, want default %v", st.Config.MaxAge, wire.StatusMaxAge)
+	}
+}
+
 func TestDial_CredsFileNotFound(t *testing.T) {
 	s := runJSServer(t)
 	_, err := wire.Dial(wire.DialConfig{

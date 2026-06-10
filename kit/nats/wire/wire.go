@@ -15,6 +15,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -169,28 +171,70 @@ func (c *Client) Close() {
 // pick the new limits up on the next service start.
 const (
 	// StatusMaxAge keeps ~a week of historical status events for
-	// post-mortem on recent scans. Tune via wire.go if you need more.
+	// post-mortem on recent scans. Override at deploy time via
+	// HARPORIS_STATUS_RETENTION_AGE (Go duration: "168h", "30m", …).
 	StatusMaxAge = 7 * 24 * time.Hour
 	// StatusMaxBytes is a hard cap on disk used by the status stream.
 	// 512 MiB at ~200 B/event ≈ 2.6M events ≈ tens of thousands of
-	// scans depending on chunk count.
+	// scans depending on chunk count. Override via
+	// HARPORIS_STATUS_RETENTION_MAX_BYTES (int64 bytes).
 	StatusMaxBytes = 512 * 1024 * 1024
 	// WorkQueueMaxBytes bounds REQUESTS / CHUNKS / FINDINGS at 2 GiB
 	// each so a wedged consumer can't fill the NATS volume during a
-	// large scan or a burst of submissions.
+	// large scan or a burst of submissions. Override via
+	// HARPORIS_WORKQUEUE_MAX_BYTES (int64 bytes).
 	WorkQueueMaxBytes = 2 * 1024 * 1024 * 1024
 )
 
+// Env vars for tuning bounded-growth limits at deploy time without
+// rebuilding. Invalid values silently fall back to the constants —
+// operator misconfigs shouldn't break service startup.
+const (
+	EnvStatusRetentionAge      = "HARPORIS_STATUS_RETENTION_AGE"
+	EnvStatusRetentionMaxBytes = "HARPORIS_STATUS_RETENTION_MAX_BYTES"
+	EnvWorkQueueMaxBytes       = "HARPORIS_WORKQUEUE_MAX_BYTES"
+)
+
+func statusMaxAge() time.Duration {
+	if v := os.Getenv(EnvStatusRetentionAge); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return StatusMaxAge
+}
+
+func statusMaxBytes() int64 {
+	if v := os.Getenv(EnvStatusRetentionMaxBytes); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return StatusMaxBytes
+}
+
+func workQueueMaxBytes() int64 {
+	if v := os.Getenv(EnvWorkQueueMaxBytes); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return WorkQueueMaxBytes
+}
+
 func EnsureStreams(js nats.JetStreamContext) error {
+	wqMax := workQueueMaxBytes()
+	stMax := statusMaxBytes()
+	stAge := statusMaxAge()
 	configs := []*nats.StreamConfig{
 		// RequestsStream captures ONLY the requests subject. CancelSubject is
 		// intentionally not in the filter: cancel is a fire-and-forget broadcast
 		// over core NATS, and a WorkQueuePolicy stream with no matching
 		// subscriber would let cancels accumulate without bound.
-		{Name: RequestsStream, Subjects: []string{ScansRequestsSubject}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, MaxBytes: WorkQueueMaxBytes, Discard: nats.DiscardOld},
-		{Name: ChunksStream, Subjects: []string{"harporis.chunks.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, MaxBytes: WorkQueueMaxBytes, Discard: nats.DiscardOld},
-		{Name: StatusStream, Subjects: []string{"harporis.status.>"}, Storage: nats.FileStorage, Retention: nats.LimitsPolicy, MaxAge: StatusMaxAge, MaxBytes: StatusMaxBytes, Discard: nats.DiscardOld},
-		{Name: FindingsStream, Subjects: []string{"harporis.findings.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, Duplicates: 5 * time.Minute, MaxBytes: WorkQueueMaxBytes, Discard: nats.DiscardOld},
+		{Name: RequestsStream, Subjects: []string{ScansRequestsSubject}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, MaxBytes: wqMax, Discard: nats.DiscardOld},
+		{Name: ChunksStream, Subjects: []string{"harporis.chunks.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, MaxBytes: wqMax, Discard: nats.DiscardOld},
+		{Name: StatusStream, Subjects: []string{"harporis.status.>"}, Storage: nats.FileStorage, Retention: nats.LimitsPolicy, MaxAge: stAge, MaxBytes: stMax, Discard: nats.DiscardOld},
+		{Name: FindingsStream, Subjects: []string{"harporis.findings.>"}, Storage: nats.FileStorage, Retention: nats.WorkQueuePolicy, Duplicates: 5 * time.Minute, MaxBytes: wqMax, Discard: nats.DiscardOld},
 	}
 	for _, c := range configs {
 		if _, err := js.AddStream(c); err == nil {
