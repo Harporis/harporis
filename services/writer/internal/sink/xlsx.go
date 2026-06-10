@@ -76,6 +76,10 @@ func (x *XLSX) Finalize(_ context.Context, scanID string) error {
 	return x.acc.Finalize(scanID)
 }
 
+// SetReplicaID stamps replica_id into the per-scan filename. See
+// BatchedAccumulator.SetReplicaID.
+func (x *XLSX) SetReplicaID(id string) { x.acc.SetReplicaID(id) }
+
 // writeXLSXSummary populates the Summary sheet with per-severity totals
 // + a per-rule breakdown. Layout: two stacked tables separated by a
 // blank row so a copy-paste into a doc carries the structure.
@@ -157,7 +161,7 @@ func joinBytesLines(lines [][]byte) string {
 }
 
 func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {
-	path := filepath.Join(x.rootDir, scanID+".xlsx")
+	path := filepath.Join(x.rootDir, scanID+x.acc.ReplicaSuffix()+".xlsx")
 	rootClean := filepath.Clean(x.rootDir)
 	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
 		return fmt.Errorf("sink: path %q escapes rootDir %q", path, x.rootDir)

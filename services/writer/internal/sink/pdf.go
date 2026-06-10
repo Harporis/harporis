@@ -84,6 +84,10 @@ func (p *PDF) Finalize(_ context.Context, scanID string) error {
 	return p.acc.Finalize(scanID)
 }
 
+// SetReplicaID stamps replica_id into the per-scan filename. See
+// BatchedAccumulator.SetReplicaID.
+func (p *PDF) SetReplicaID(id string) { p.acc.SetReplicaID(id) }
+
 // pdfStripControl makes a string safe for the PDF row: Go font covers
 // the Basic Multilingual Plane but Helvetica-style fallbacks for
 // non-printables look like boxes; collapsing to '.' / ' ' keeps the
@@ -163,7 +167,7 @@ func severityRGB(sev string) (uint8, uint8, uint8) {
 }
 
 func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
-	path := filepath.Join(p.rootDir, scanID+".pdf")
+	path := filepath.Join(p.rootDir, scanID+p.acc.ReplicaSuffix()+".pdf")
 	rootClean := filepath.Clean(p.rootDir)
 	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
 		return fmt.Errorf("sink: path %q escapes rootDir %q", path, p.rootDir)

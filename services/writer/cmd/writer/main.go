@@ -58,6 +58,14 @@ func main() {
 		FlushBatch:    cfg.FlushBatch,
 		FlushInterval: time.Duration(cfg.FlushIntervalMs) * time.Millisecond,
 	}
+	// HOSTNAME is set by docker compose / k8s to a per-replica id.
+	// Stamping it into each sink's per-scan filename avoids the
+	// "two replicas race to rename onto the same path" bug in
+	// multi-replica deployments (NDJSON uses O_APPEND so it's safe).
+	// Empty keeps the legacy single-file shape for single-replica
+	// (the default) deployments.
+	replicaID := os.Getenv("HOSTNAME")
+
 	sinks := make([]sink.Sink, 0, 6)
 	if cfg.NDJSONEnabled != nil && *cfg.NDJSONEnabled {
 		nd, err := sink.NewNDJSONFile(cfg.OutputDir)
@@ -71,6 +79,9 @@ func main() {
 		if err != nil {
 			fatal("init sarif sink: %v", err)
 		}
+		if replicaID != "" {
+			sa.SetReplicaID(replicaID)
+		}
 		sinks = append(sinks, sa)
 	}
 	if cfg.HTMLEnabled != nil && *cfg.HTMLEnabled {
@@ -81,12 +92,18 @@ func main() {
 		if cfg.MaskSecrets != nil && *cfg.MaskSecrets {
 			hs.SetMaskSecrets(true)
 		}
+		if replicaID != "" {
+			hs.SetReplicaID(replicaID)
+		}
 		sinks = append(sinks, hs)
 	}
 	if cfg.XLSXEnabled != nil && *cfg.XLSXEnabled {
 		xs, err := sink.NewXLSXConfig(cfg.OutputDir, batchCfg)
 		if err != nil {
 			fatal("init xlsx sink: %v", err)
+		}
+		if replicaID != "" {
+			xs.SetReplicaID(replicaID)
 		}
 		sinks = append(sinks, xs)
 	}
@@ -98,6 +115,9 @@ func main() {
 		if cfg.MaskSecrets != nil && *cfg.MaskSecrets {
 			ps.SetMaskSecrets(true)
 		}
+		if replicaID != "" {
+			ps.SetReplicaID(replicaID)
+		}
 		sinks = append(sinks, ps)
 	}
 	if cfg.ParquetEnabled != nil && *cfg.ParquetEnabled {
@@ -105,11 +125,8 @@ func main() {
 		if err != nil {
 			fatal("init parquet sink: %v", err)
 		}
-		// Stamp replica id into the per-scan filename so multiple
-		// writer replicas don't race to rename onto the same path.
-		// HOSTNAME is set by docker compose to the container name.
-		if rid := os.Getenv("HOSTNAME"); rid != "" {
-			pq.SetReplicaID(rid)
+		if replicaID != "" {
+			pq.SetReplicaID(replicaID)
 		}
 		sinks = append(sinks, pq)
 	}

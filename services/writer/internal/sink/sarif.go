@@ -100,8 +100,13 @@ func (s *SARIF) Finalize(_ context.Context, scanID string) error {
 	return s.acc.Finalize(scanID)
 }
 
+// SetReplicaID stamps replica_id into the per-scan filename so
+// multiple writer replicas don't race to rename onto the same path.
+// See BatchedAccumulator.SetReplicaID.
+func (s *SARIF) SetReplicaID(id string) { s.acc.SetReplicaID(id) }
+
 func (s *SARIF) flush(scanID string, findings []*v1.Finding) error {
-	path := filepath.Join(s.rootDir, scanID+".sarif")
+	path := filepath.Join(s.rootDir, scanID+s.acc.ReplicaSuffix()+".sarif")
 	rootClean := filepath.Clean(s.rootDir)
 	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
 		return fmt.Errorf("sink: path %q escapes rootDir %q", path, s.rootDir)

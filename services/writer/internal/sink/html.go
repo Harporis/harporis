@@ -81,8 +81,12 @@ func (h *HTML) Finalize(_ context.Context, scanID string) error {
 	return h.acc.Finalize(scanID)
 }
 
+// SetReplicaID stamps replica_id into the per-scan filename. See
+// BatchedAccumulator.SetReplicaID.
+func (h *HTML) SetReplicaID(id string) { h.acc.SetReplicaID(id) }
+
 func (h *HTML) flush(scanID string, findings []*v1.Finding) error {
-	path := filepath.Join(h.rootDir, scanID+".html")
+	path := filepath.Join(h.rootDir, scanID+h.acc.ReplicaSuffix()+".html")
 	rootClean := filepath.Clean(h.rootDir)
 	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
 		return fmt.Errorf("sink: path %q escapes rootDir %q", path, h.rootDir)

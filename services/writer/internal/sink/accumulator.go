@@ -70,12 +70,37 @@ type BatchedAccumulator struct {
 	cfg     BatchConfig
 	flushFn FlushFn
 
-	mu     sync.Mutex
-	closed bool
-	scans  map[string]*accState
+	mu        sync.Mutex
+	closed    bool
+	scans     map[string]*accState
+	replicaID string
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
+}
+
+// SetReplicaID stamps a per-writer-replica id that sinks use to
+// disambiguate the per-scan final filename across writer replicas
+// (avoids "two replicas race to rename onto the same path" in
+// multi-replica deployments). Empty keeps the legacy single-file shape.
+// Mirrors Parquet.SetReplicaID — kept here so all accumulator sinks
+// inherit the same opt-in pattern.
+func (a *BatchedAccumulator) SetReplicaID(id string) {
+	a.mu.Lock()
+	a.replicaID = id
+	a.mu.Unlock()
+}
+
+// ReplicaSuffix returns "" or ".<replicaID>" — call from a sink's
+// flush() to build the final filename: scanID + ReplicaSuffix() + ".ext".
+func (a *BatchedAccumulator) ReplicaSuffix() string {
+	a.mu.Lock()
+	id := a.replicaID
+	a.mu.Unlock()
+	if id == "" {
+		return ""
+	}
+	return "." + id
 }
 
 // NewBatchedAccumulator constructs an accumulator with the supplied
