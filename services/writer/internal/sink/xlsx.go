@@ -16,26 +16,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	xlsxlib "github.com/xuri/excelize/v2"
 
 	kitscan "github.com/Harporis/harporis/kit/scan"
-	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 const XLSXDefaultMaxPerScan = 10_000
 
 // XLSX writes one .xlsx workbook per scan_id.
 type XLSX struct {
-	rootDir    string
-	maxPerScan int
-
-	mu     sync.Mutex
-	closed bool
-	scans  map[string][]*v1.Finding
+	rootDir string
+	acc     *BatchedAccumulator
 }
 
 func NewXLSX(rootDir string) (*XLSX, error) {
@@ -43,23 +36,40 @@ func NewXLSX(rootDir string) (*XLSX, error) {
 }
 
 func NewXLSXN(rootDir string, maxPerScan int) (*XLSX, error) {
+	return NewXLSXConfig(rootDir, BatchConfig{MaxPerScan: maxPerScan})
+}
+
+func NewXLSXConfig(rootDir string, cfg BatchConfig) (*XLSX, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
 	}
-	if maxPerScan <= 0 {
-		maxPerScan = XLSXDefaultMaxPerScan
+	if cfg.MaxPerScan <= 0 {
+		cfg.MaxPerScan = XLSXDefaultMaxPerScan
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
-	return &XLSX{
-		rootDir:    rootDir,
-		maxPerScan: maxPerScan,
-		scans:      make(map[string][]*v1.Finding),
-	}, nil
+	cfg.SinkLabel = "xlsx_file"
+	x := &XLSX{rootDir: rootDir}
+	x.acc = NewBatchedAccumulator(cfg, x.flush)
+	return x, nil
 }
 
 func (x *XLSX) Name() string { return "xlsx_file" }
+
+func (x *XLSX) Write(ctx context.Context, f *v1.Finding) error {
+	if f == nil {
+		return fmt.Errorf("sink: nil Finding")
+	}
+	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
+		return fmt.Errorf("sink: %w", err)
+	}
+	return x.acc.Add(ctx, f)
+}
+
+func (x *XLSX) Close() error { return x.acc.Close() }
+
+func (x *XLSX) Flush() error { return x.acc.Flush() }
 
 // writeXLSXSummary populates the Summary sheet with per-severity totals
 // + a per-rule breakdown. Layout: two stacked tables separated by a
@@ -139,44 +149,6 @@ func joinBytesLines(lines [][]byte) string {
 		parts[i] = string(l)
 	}
 	return strings.Join(parts, "\n")
-}
-
-func (x *XLSX) Write(ctx context.Context, f *v1.Finding) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if f == nil {
-		return fmt.Errorf("sink: nil Finding")
-	}
-	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
-		return fmt.Errorf("sink: %w", err)
-	}
-	x.mu.Lock()
-	if x.closed {
-		x.mu.Unlock()
-		return ErrSinkClosed
-	}
-	findings := append(x.scans[f.ScanId], f)
-	if len(findings) > x.maxPerScan {
-		x.mu.Unlock()
-		return fmt.Errorf("sink: scan %s exceeded max %d findings", f.ScanId, x.maxPerScan)
-	}
-	x.scans[f.ScanId] = findings
-	snapshot := make([]*v1.Finding, len(findings))
-	copy(snapshot, findings)
-	x.mu.Unlock()
-	start := time.Now()
-	err := x.flush(f.ScanId, snapshot)
-	metrics.ObserveFlush(x.Name(), 1, "batch", time.Since(start).Seconds())
-	return err
-}
-
-func (x *XLSX) Close() error {
-	x.mu.Lock()
-	x.closed = true
-	x.scans = nil
-	x.mu.Unlock()
-	return nil
 }
 
 func (x *XLSX) flush(scanID string, findings []*v1.Finding) error {

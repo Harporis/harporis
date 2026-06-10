@@ -23,12 +23,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
-	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 // SARIFDefaultMaxPerScan caps the in-memory findings accumulator per scan.
@@ -37,86 +34,64 @@ import (
 // below the 64-bit JSON array limit any tool consumes.
 const SARIFDefaultMaxPerScan = 10_000
 
-// SARIF emits one SARIF v2.1.0 report per scan_id to rootDir. The file
-// is rewritten on every Write so a partial scan is always inspectable.
+// SARIF emits one SARIF v2.1.0 report per scan_id to rootDir.
 type SARIF struct {
-	rootDir    string
-	maxPerScan int
-
-	mu     sync.Mutex
-	closed bool
-	scans  map[string][]*v1.Finding
+	rootDir string
+	acc     *BatchedAccumulator
 }
 
-// NewSARIF constructs a SARIF sink with the default per-scan cap.
+// NewSARIF constructs a SARIF sink in the legacy sync-flush mode
+// (FlushBatch=1, FlushInterval=0). Suitable for tests and operators
+// who want each Finding to land on disk before the next is accepted.
 func NewSARIF(rootDir string) (*SARIF, error) {
 	return NewSARIFN(rootDir, SARIFDefaultMaxPerScan)
 }
 
-// NewSARIFN exposes the per-scan accumulator cap for tests.
+// NewSARIFN is the legacy explicit-cap constructor. Sync flush mode.
 func NewSARIFN(rootDir string, maxPerScan int) (*SARIF, error) {
+	return NewSARIFConfig(rootDir, BatchConfig{MaxPerScan: maxPerScan})
+}
+
+// NewSARIFConfig wires the batched accumulator. cfg.SinkLabel is
+// stamped automatically from Name().
+func NewSARIFConfig(rootDir string, cfg BatchConfig) (*SARIF, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
 	}
-	if maxPerScan <= 0 {
-		maxPerScan = SARIFDefaultMaxPerScan
+	if cfg.MaxPerScan <= 0 {
+		cfg.MaxPerScan = SARIFDefaultMaxPerScan
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
-	return &SARIF{
-		rootDir:    rootDir,
-		maxPerScan: maxPerScan,
-		scans:      make(map[string][]*v1.Finding),
-	}, nil
+	cfg.SinkLabel = "sarif_file"
+	s := &SARIF{rootDir: rootDir}
+	s.acc = NewBatchedAccumulator(cfg, s.flush)
+	return s, nil
 }
 
 // Name returns the sink identifier used as a Prometheus label.
 func (s *SARIF) Name() string { return "sarif_file" }
 
-// Write appends f to the per-scan accumulator and rewrites the SARIF
-// file. Returns ErrSinkClosed after Close has run.
+// Write delegates to the accumulator; it returns synchronously after a
+// batch-triggered flush (or immediately if still under the threshold).
 func (s *SARIF) Write(ctx context.Context, f *v1.Finding) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if f == nil {
 		return fmt.Errorf("sink: nil Finding")
 	}
 	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
 		return fmt.Errorf("sink: %w", err)
 	}
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return ErrSinkClosed
-	}
-	findings := append(s.scans[f.ScanId], f)
-	if len(findings) > s.maxPerScan {
-		s.mu.Unlock()
-		return fmt.Errorf("sink: scan %s exceeded max %d findings", f.ScanId, s.maxPerScan)
-	}
-	s.scans[f.ScanId] = findings
-	snapshot := make([]*v1.Finding, len(findings))
-	copy(snapshot, findings)
-	s.mu.Unlock()
-
-	start := time.Now()
-	err := s.flush(f.ScanId, snapshot)
-	metrics.ObserveFlush(s.Name(), 1, "batch", time.Since(start).Seconds())
-	return err
+	return s.acc.Add(ctx, f)
 }
 
-// Close discards in-memory accumulators. Files on disk are left in their
-// last-written state (already valid SARIF reports). Idempotent.
-func (s *SARIF) Close() error {
-	s.mu.Lock()
-	s.closed = true
-	s.scans = nil
-	s.mu.Unlock()
-	return nil
-}
+// Close drains every dirty buffer and stops the background ticker.
+// Idempotent.
+func (s *SARIF) Close() error { return s.acc.Close() }
+
+// Flush forces an immediate flush of every dirty buffer. Useful for
+// tests that don't want to wait on the ticker.
+func (s *SARIF) Flush() error { return s.acc.Flush() }
 
 func (s *SARIF) flush(scanID string, findings []*v1.Finding) error {
 	path := filepath.Join(s.rootDir, scanID+".sarif")

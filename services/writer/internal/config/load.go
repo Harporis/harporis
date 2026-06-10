@@ -33,6 +33,13 @@ type Config struct {
 	XLSXEnabled    *bool  `yaml:"xlsx_enabled"`
 	PDFEnabled     *bool  `yaml:"pdf_enabled"`
 	ParquetEnabled *bool  `yaml:"parquet_enabled"`
+	// FlushBatch — accumulator sinks (SARIF/HTML/XLSX/PDF/Parquet)
+	// flush after this many NEW findings; <= 1 = sync flush on every
+	// Finding (legacy O(N^2) behaviour).
+	FlushBatch int `yaml:"flush_batch"`
+	// FlushIntervalMs — periodic ticker that catches idle buffers so
+	// partial-scan reports stay fresh; 0 disables the ticker.
+	FlushIntervalMs int `yaml:"flush_interval_ms"`
 	// MaskSecrets, when true, renders matched_secret as first-4 chars +
 	// "***" in human-facing sinks (HTML + PDF). NDJSON/SARIF/XLSX still
 	// carry the raw secret because their primary use cases (jq
@@ -107,6 +114,12 @@ func applyDefaults(c *Config) {
 	if c.MaskSecrets == nil {
 		v := false
 		c.MaskSecrets = &v
+	}
+	if c.FlushBatch <= 0 {
+		c.FlushBatch = 50
+	}
+	if c.FlushIntervalMs <= 0 {
+		c.FlushIntervalMs = 2000
 	}
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceWriter])

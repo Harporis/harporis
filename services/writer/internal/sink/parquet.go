@@ -24,26 +24,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/parquet-go/parquet-go"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
-	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 const ParquetDefaultMaxPerScan = 10_000
 
 // Parquet writes one .parquet workbook per scan_id.
 type Parquet struct {
-	rootDir    string
-	maxPerScan int
-
-	mu     sync.Mutex
-	closed bool
-	scans  map[string][]*v1.Finding
+	rootDir string
+	acc     *BatchedAccumulator
 }
 
 // parquetRow is the on-disk row schema. Struct tag names match the
@@ -73,61 +66,40 @@ func NewParquet(rootDir string) (*Parquet, error) {
 }
 
 func NewParquetN(rootDir string, maxPerScan int) (*Parquet, error) {
+	return NewParquetConfig(rootDir, BatchConfig{MaxPerScan: maxPerScan})
+}
+
+func NewParquetConfig(rootDir string, cfg BatchConfig) (*Parquet, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
 	}
-	if maxPerScan <= 0 {
-		maxPerScan = ParquetDefaultMaxPerScan
+	if cfg.MaxPerScan <= 0 {
+		cfg.MaxPerScan = ParquetDefaultMaxPerScan
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
-	return &Parquet{
-		rootDir:    rootDir,
-		maxPerScan: maxPerScan,
-		scans:      make(map[string][]*v1.Finding),
-	}, nil
+	cfg.SinkLabel = "parquet_file"
+	p := &Parquet{rootDir: rootDir}
+	p.acc = NewBatchedAccumulator(cfg, p.flush)
+	return p, nil
 }
 
 func (p *Parquet) Name() string { return "parquet_file" }
 
 func (p *Parquet) Write(ctx context.Context, f *v1.Finding) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if f == nil {
 		return fmt.Errorf("sink: nil Finding")
 	}
 	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
 		return fmt.Errorf("sink: %w", err)
 	}
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return ErrSinkClosed
-	}
-	findings := append(p.scans[f.ScanId], f)
-	if len(findings) > p.maxPerScan {
-		p.mu.Unlock()
-		return fmt.Errorf("sink: scan %s exceeded max %d findings", f.ScanId, p.maxPerScan)
-	}
-	p.scans[f.ScanId] = findings
-	snapshot := make([]*v1.Finding, len(findings))
-	copy(snapshot, findings)
-	p.mu.Unlock()
-	start := time.Now()
-	err := p.flush(f.ScanId, snapshot)
-	metrics.ObserveFlush(p.Name(), 1, "batch", time.Since(start).Seconds())
-	return err
+	return p.acc.Add(ctx, f)
 }
 
-func (p *Parquet) Close() error {
-	p.mu.Lock()
-	p.closed = true
-	p.scans = nil
-	p.mu.Unlock()
-	return nil
-}
+func (p *Parquet) Close() error { return p.acc.Close() }
+
+func (p *Parquet) Flush() error { return p.acc.Flush() }
 
 func (p *Parquet) flush(scanID string, findings []*v1.Finding) error {
 	path := filepath.Join(p.rootDir, scanID+".parquet")

@@ -16,12 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
-	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 // HTMLDefaultMaxPerScan matches SARIF's cap — keeps memory bounded
@@ -31,12 +28,8 @@ const HTMLDefaultMaxPerScan = 10_000
 // HTML emits one HTML report per scan_id to rootDir.
 type HTML struct {
 	rootDir    string
-	maxPerScan int
 	maskSecret bool
-
-	mu     sync.Mutex
-	closed bool
-	scans  map[string][]*v1.Finding
+	acc        *BatchedAccumulator
 }
 
 // SetMaskSecrets toggles secret-masking in rendered cards. Off by
@@ -48,61 +41,40 @@ func NewHTML(rootDir string) (*HTML, error) {
 }
 
 func NewHTMLN(rootDir string, maxPerScan int) (*HTML, error) {
+	return NewHTMLConfig(rootDir, BatchConfig{MaxPerScan: maxPerScan})
+}
+
+func NewHTMLConfig(rootDir string, cfg BatchConfig) (*HTML, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
 	}
-	if maxPerScan <= 0 {
-		maxPerScan = HTMLDefaultMaxPerScan
+	if cfg.MaxPerScan <= 0 {
+		cfg.MaxPerScan = HTMLDefaultMaxPerScan
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
-	return &HTML{
-		rootDir:    rootDir,
-		maxPerScan: maxPerScan,
-		scans:      make(map[string][]*v1.Finding),
-	}, nil
+	cfg.SinkLabel = "html_file"
+	h := &HTML{rootDir: rootDir}
+	h.acc = NewBatchedAccumulator(cfg, h.flush)
+	return h, nil
 }
 
 func (h *HTML) Name() string { return "html_file" }
 
 func (h *HTML) Write(ctx context.Context, f *v1.Finding) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if f == nil {
 		return fmt.Errorf("sink: nil Finding")
 	}
 	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
 		return fmt.Errorf("sink: %w", err)
 	}
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return ErrSinkClosed
-	}
-	findings := append(h.scans[f.ScanId], f)
-	if len(findings) > h.maxPerScan {
-		h.mu.Unlock()
-		return fmt.Errorf("sink: scan %s exceeded max %d findings", f.ScanId, h.maxPerScan)
-	}
-	h.scans[f.ScanId] = findings
-	snapshot := make([]*v1.Finding, len(findings))
-	copy(snapshot, findings)
-	h.mu.Unlock()
-	start := time.Now()
-	err := h.flush(f.ScanId, snapshot)
-	metrics.ObserveFlush(h.Name(), 1, "batch", time.Since(start).Seconds())
-	return err
+	return h.acc.Add(ctx, f)
 }
 
-func (h *HTML) Close() error {
-	h.mu.Lock()
-	h.closed = true
-	h.scans = nil
-	h.mu.Unlock()
-	return nil
-}
+func (h *HTML) Close() error { return h.acc.Close() }
+
+func (h *HTML) Flush() error { return h.acc.Flush() }
 
 func (h *HTML) flush(scanID string, findings []*v1.Finding) error {
 	path := filepath.Join(h.rootDir, scanID+".html")

@@ -54,7 +54,11 @@ func main() {
 	// code-scanning industry format. Both write into cfg.OutputDir,
 	// keyed by scan_id with distinct extensions (.ndjson / .sarif), so
 	// the operator gets both views from one mount.
-	sinks := make([]sink.Sink, 0, 2)
+	batchCfg := sink.BatchConfig{
+		FlushBatch:    cfg.FlushBatch,
+		FlushInterval: time.Duration(cfg.FlushIntervalMs) * time.Millisecond,
+	}
+	sinks := make([]sink.Sink, 0, 6)
 	if cfg.NDJSONEnabled != nil && *cfg.NDJSONEnabled {
 		nd, err := sink.NewNDJSONFile(cfg.OutputDir)
 		if err != nil {
@@ -63,14 +67,14 @@ func main() {
 		sinks = append(sinks, nd)
 	}
 	if cfg.SARIFEnabled != nil && *cfg.SARIFEnabled {
-		sa, err := sink.NewSARIF(cfg.OutputDir)
+		sa, err := sink.NewSARIFConfig(cfg.OutputDir, batchCfg)
 		if err != nil {
 			fatal("init sarif sink: %v", err)
 		}
 		sinks = append(sinks, sa)
 	}
 	if cfg.HTMLEnabled != nil && *cfg.HTMLEnabled {
-		hs, err := sink.NewHTML(cfg.OutputDir)
+		hs, err := sink.NewHTMLConfig(cfg.OutputDir, batchCfg)
 		if err != nil {
 			fatal("init html sink: %v", err)
 		}
@@ -80,14 +84,14 @@ func main() {
 		sinks = append(sinks, hs)
 	}
 	if cfg.XLSXEnabled != nil && *cfg.XLSXEnabled {
-		xs, err := sink.NewXLSX(cfg.OutputDir)
+		xs, err := sink.NewXLSXConfig(cfg.OutputDir, batchCfg)
 		if err != nil {
 			fatal("init xlsx sink: %v", err)
 		}
 		sinks = append(sinks, xs)
 	}
 	if cfg.PDFEnabled != nil && *cfg.PDFEnabled {
-		ps, err := sink.NewPDF(cfg.OutputDir)
+		ps, err := sink.NewPDFConfig(cfg.OutputDir, batchCfg)
 		if err != nil {
 			fatal("init pdf sink: %v", err)
 		}
@@ -97,7 +101,7 @@ func main() {
 		sinks = append(sinks, ps)
 	}
 	if cfg.ParquetEnabled != nil && *cfg.ParquetEnabled {
-		pq, err := sink.NewParquet(cfg.OutputDir)
+		pq, err := sink.NewParquetConfig(cfg.OutputDir, batchCfg)
 		if err != nil {
 			fatal("init parquet sink: %v", err)
 		}

@@ -17,5 +17,13 @@ ndjson_enabled: true        # one .ndjson per scan_id (streaming-friendly, jq in
 sarif_enabled: true         # one .sarif per scan_id (SARIF v2.1.0, IDE/SCM integrations)
 parquet_enabled: true       # one .parquet per scan_id (SIEM / data-warehouse / DuckDB ingestion)
 mask_secrets: false         # when true, HTML+PDF render secret[:4] + "***" (NDJSON/SARIF/XLSX/Parquet always carry raw secrets)
+# Accumulator-sink batching. Each accumulator sink (SARIF/HTML/XLSX/PDF/Parquet)
+# coalesces per-finding writes — instead of rewriting the full file on every
+# Finding (O(N^2) bytes), it flushes once `flush_batch` new findings are
+# pending OR once `flush_interval_ms` has elapsed (whichever fires first).
+# NDJSON is streaming and ignores these. Set flush_batch=1 to restore the
+# legacy "render-on-every-write" behaviour.
+flush_batch: 50             # findings per accumulator-sink flush
+flush_interval_ms: 2000     # backstop ticker; 0 = disable
 metrics_addr: ":9102"
 log_level: "${LOG_LEVEL:-info}"
