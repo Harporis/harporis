@@ -27,6 +27,9 @@ var (
 	ActiveScans            prometheus.Gauge
 	BuildInfo              *prometheus.GaugeVec // labels: version, commit, proto_version
 	OrphanTempfilesSwept   prometheus.Counter
+	RetentionSwept         *prometheus.CounterVec // labels: reason (age|size)
+	RetentionBytesSwept    *prometheus.CounterVec // labels: reason
+	RetentionLastRunUnix   prometheus.Gauge
 
 	registry *prometheus.Registry
 )
@@ -72,11 +75,24 @@ func Init() {
 			Name: "writer_orphan_tempfiles_swept_total",
 			Help: "Stale .<scan_id>.<hex>.{xlsx,pdf,sarif,html} files cleaned up on writer startup (left behind by a crash mid-flush).",
 		})
+		RetentionSwept = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "writer_findings_retention_swept_total",
+			Help: "Findings files deleted by the retention sweeper, labelled by reason: `age` (older than TTL) or `size` (oldest-first eviction past MaxBytes cap).",
+		}, []string{"reason"})
+		RetentionBytesSwept = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "writer_findings_retention_bytes_swept_total",
+			Help: "Bytes reclaimed by the retention sweeper, same labelling as writer_findings_retention_swept_total.",
+		}, []string{"reason"})
+		RetentionLastRunUnix = prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "writer_findings_retention_last_run_unix_seconds",
+			Help: "Unix epoch seconds of the most recent retention sweep completion. 0 if retention is disabled.",
+		})
 		for _, c := range []prometheus.Collector{
 			FindingsConsumed, FindingsWriteSeconds, SinkWrites, SinkErrors, SinkFormatIgnored,
 			SinkFlushSeconds, SinkFlushTotal, SinkFlushBatchSize, SinkPendingFindings,
 			SinkPostFinalizeDropped,
 			NATSDeliveryErrors, ActiveScans, BuildInfo, OrphanTempfilesSwept,
+			RetentionSwept, RetentionBytesSwept, RetentionLastRunUnix,
 		} {
 			registry.MustRegister(c)
 		}
@@ -94,6 +110,8 @@ func Init() {
 		SinkPendingFindings.WithLabelValues("")
 		SinkPostFinalizeDropped.WithLabelValues("")
 		NATSDeliveryErrors.WithLabelValues("")
+		RetentionSwept.WithLabelValues("")
+		RetentionBytesSwept.WithLabelValues("")
 	})
 }
 

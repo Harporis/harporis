@@ -51,6 +51,15 @@ type Config struct {
 	// pipelines, code-scanning ingestion, spreadsheet triage) need it.
 	// Default: false (don't break existing operator expectations).
 	MaskSecrets *bool `yaml:"mask_secrets"`
+	// Findings retention. Both default to 0 (disabled) so existing
+	// operators see no behaviour change. Set either to enable the
+	// hourly sweep that prunes old sink files from output_dir.
+	//   RetentionAgeHours: delete files older than N hours (0 = off)
+	//   RetentionMaxBytes: oldest-first evict until total ≤ N bytes (0 = off)
+	//   RetentionIntervalSeconds: sweep cadence (default 3600).
+	RetentionAgeHours       int   `yaml:"retention_age_hours"`
+	RetentionMaxBytes       int64 `yaml:"retention_max_bytes"`
+	RetentionIntervalSeconds int  `yaml:"retention_interval_seconds"`
 	MetricsAddr   string `yaml:"metrics_addr"`
 	LogLevel      string `yaml:"log_level"`
 }
@@ -128,6 +137,9 @@ func applyDefaults(c *Config) {
 	}
 	if c.FinalizeGraceMs <= 0 {
 		c.FinalizeGraceMs = 10_000
+	}
+	if c.RetentionIntervalSeconds <= 0 {
+		c.RetentionIntervalSeconds = 3600
 	}
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceWriter])

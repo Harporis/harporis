@@ -150,6 +150,22 @@ func main() {
 		metrics.OrphanTempfilesSwept.Add(float64(swept))
 	}
 
+	// Findings retention sweep. Both caps off by default; opt-in via
+	// retention_age_hours / retention_max_bytes in writer.yaml. Runs
+	// once on startup, then on a ticker until rootCtx is cancelled.
+	retentionPolicy := sink.RetentionPolicy{
+		TTL:      time.Duration(cfg.RetentionAgeHours) * time.Hour,
+		MaxBytes: cfg.RetentionMaxBytes,
+	}
+	var retentionWG sync.WaitGroup
+	if !retentionPolicy.Disabled() {
+		retentionWG.Add(1)
+		go func() {
+			defer retentionWG.Done()
+			runRetentionLoop(rootCtx, cfg.OutputDir, retentionPolicy, time.Duration(cfg.RetentionIntervalSeconds)*time.Second)
+		}()
+	}
+
 	// NATS.
 	cl, err := wire.Dial(wire.DialConfig{
 		URL:        cfg.NATSURL,
@@ -289,6 +305,7 @@ func main() {
 	go func() {
 		workerWG.Wait()
 		statusWG.Wait()
+		retentionWG.Wait()
 		close(done)
 	}()
 	select {
@@ -307,6 +324,51 @@ func main() {
 		slog.Warn("nats drain", "err", err)
 	}
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+// runRetentionLoop sweeps the findings dir on a ticker until ctx is
+// cancelled, reporting reclaimed files/bytes via Prometheus.
+func runRetentionLoop(ctx context.Context, rootDir string, policy sink.RetentionPolicy, interval time.Duration) {
+	sweep := func() {
+		stats, err := sink.SweepRetention(rootDir, policy, time.Now(), func(p string, err error) {
+			slog.Warn("retention sweep", "path", p, "err", err)
+		})
+		if err != nil {
+			slog.Warn("retention sweep error", "err", err)
+		}
+		if stats.RemovedByAge > 0 {
+			metrics.RetentionSwept.WithLabelValues("age").Add(float64(stats.RemovedByAge))
+		}
+		if stats.RemovedBySize > 0 {
+			metrics.RetentionSwept.WithLabelValues("size").Add(float64(stats.RemovedBySize))
+		}
+		if stats.BytesRemoved > 0 {
+			// All bytes lump together when both reasons hit — operators
+			// who want the split should diff the *_swept_total counters.
+			metrics.RetentionBytesSwept.WithLabelValues("total").Add(float64(stats.BytesRemoved))
+		}
+		metrics.RetentionLastRunUnix.Set(float64(time.Now().Unix()))
+		if stats.RemovedByAge+stats.RemovedBySize > 0 {
+			slog.Info("findings retention swept",
+				"by_age", stats.RemovedByAge,
+				"by_size", stats.RemovedBySize,
+				"bytes", stats.BytesRemoved,
+				"remaining_files", stats.RemainingFiles,
+				"remaining_bytes", stats.RemainingBytes,
+			)
+		}
+	}
+	sweep()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			sweep()
+		}
+	}
 }
 
 func setupLogger(level string) {

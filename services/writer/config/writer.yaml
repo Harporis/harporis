@@ -33,5 +33,14 @@ flush_interval_ms: 2000     # backstop ticker; 0 = disable
 # state) before the last findings arrive. Default 10 s suits scans
 # up to ~5 k findings on typical hardware.
 finalize_grace_ms: 10000
+# Findings retention sweep. Bounds disk usage on long-running deployments
+# by deleting old sink output files from output_dir. Both caps independent:
+#   retention_age_hours:        delete files older than N hours (0 = off)
+#   retention_max_bytes:        oldest-first evict until total ≤ N bytes (0 = off)
+#   retention_interval_seconds: sweep cadence
+# Defaults preserve historical behaviour (no retention enforced).
+retention_age_hours: ${HARPORIS_RETENTION_AGE_HOURS:-0}
+retention_max_bytes: ${HARPORIS_RETENTION_MAX_BYTES:-0}
+retention_interval_seconds: ${HARPORIS_RETENTION_INTERVAL_SECONDS:-3600}
 metrics_addr: ":9102"
 log_level: "${LOG_LEVEL:-info}"
