@@ -61,7 +61,13 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
+	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
+
+// parquetSinkLabel is the {sink} label value used on the shared
+// flush metrics (writer_sink_flush_*) so streaming Parquet shows
+// up alongside the accumulator sinks in Prometheus.
+const parquetSinkLabel = "parquet_file"
 
 const ParquetDefaultMaxPerScan = 10_000
 
@@ -224,6 +230,7 @@ func (p *Parquet) Write(ctx context.Context, f *v1.Finding) error {
 	}
 	s.rowCount++
 	s.lastWrite = time.Now()
+	metrics.SinkPendingFindings.WithLabelValues(parquetSinkLabel).Inc()
 	return nil
 }
 
@@ -244,7 +251,7 @@ func (p *Parquet) Finalize(_ context.Context, scanID string) error {
 	}
 	delete(p.scans, scanID)
 	p.mu.Unlock()
-	return s.closeAndRename()
+	return s.closeAndRename("terminal")
 }
 
 // Close drains every still-open scan (writes Parquet footers + renames
@@ -268,7 +275,7 @@ func (p *Parquet) Close() error {
 
 	var firstErr error
 	for _, s := range states {
-		if err := s.closeAndRename(); err != nil && firstErr == nil {
+		if err := s.closeAndRename("close"); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -317,7 +324,7 @@ func (p *Parquet) finalizeIdleLocked() {
 	p.mu.Unlock()
 
 	for _, s := range toFinalize {
-		_ = s.closeAndRename()
+		_ = s.closeAndRename("idle")
 	}
 }
 
@@ -357,19 +364,29 @@ func (p *Parquet) newScanState(scanID string) (*parquetScanState, error) {
 	}, nil
 }
 
-func (s *parquetScanState) closeAndRename() error {
+func (s *parquetScanState) closeAndRename(trigger string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
 	s.closed = true
+	// Drain the pending gauge regardless of success — the rows already
+	// went out of the in-memory buffer one way or another (either onto
+	// disk or into a tempfile we're about to remove).
+	rowCount := s.rowCount
+	defer func() {
+		if rowCount > 0 {
+			metrics.SinkPendingFindings.WithLabelValues(parquetSinkLabel).Sub(float64(rowCount))
+		}
+	}()
 	// Always try to clean up the tempfile on any error path; the
 	// rename is the success edge.
 	cleanup := func() {
 		_ = s.file.Close()
 		_ = os.Remove(s.tmpPath)
 	}
+	start := time.Now()
 	if err := s.writer.Close(); err != nil {
 		cleanup()
 		return fmt.Errorf("sink: parquet writer close: %w", err)
@@ -386,6 +403,10 @@ func (s *parquetScanState) closeAndRename() error {
 		_ = os.Remove(s.tmpPath)
 		return fmt.Errorf("sink: parquet rename to %s: %w", s.finalPath, err)
 	}
+	// Emit on the shared flush metrics so streaming Parquet shows up
+	// alongside the accumulator sinks. batchSize = rowCount sized this
+	// finalization. trigger ∈ {terminal,idle,close}.
+	metrics.ObserveFlush(parquetSinkLabel, rowCount, trigger, time.Since(start).Seconds())
 	return nil
 }
 

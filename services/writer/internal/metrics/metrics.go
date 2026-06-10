@@ -49,7 +49,7 @@ func Init() {
 		}, []string{"sink"})
 		SinkFlushTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "writer_sink_flush_total",
-			Help: "Accumulator-sink flushes by trigger: `batch` (count threshold), `interval` (periodic ticker), `close` (final flush on shutdown).",
+			Help: "Sink finalizations by trigger. Accumulator sinks (SARIF/HTML/XLSX/PDF): `batch` (count threshold) | `interval` (periodic ticker) | `close` (shutdown) | `terminal` (HARPORIS_STATUS terminal event). Streaming Parquet: `terminal` | `idle` (no Write for idle_timeout) | `close`.",
 		}, []string{"sink", "trigger"})
 		SinkFlushBatchSize = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "writer_sink_flush_batch_size",
