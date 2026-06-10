@@ -22,6 +22,7 @@ var (
 	SinkFlushTotal         *prometheus.CounterVec   // labels: sink, trigger
 	SinkFlushBatchSize     *prometheus.HistogramVec // labels: sink
 	SinkPendingFindings    *prometheus.GaugeVec     // labels: sink
+	SinkPostFinalizeDropped *prometheus.CounterVec  // labels: sink
 	NATSDeliveryErrors     *prometheus.CounterVec   // labels: kind
 	ActiveScans            prometheus.Gauge
 	BuildInfo              *prometheus.GaugeVec // labels: version, commit, proto_version
@@ -60,6 +61,10 @@ func Init() {
 			Name: "writer_sink_pending_findings",
 			Help: "Findings accumulated in memory but not yet flushed to disk (sum across all live scans, per sink).",
 		}, []string{"sink"})
+		SinkPostFinalizeDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "writer_sink_post_finalize_dropped_total",
+			Help: "Findings dropped because they arrived after the per-scan sink was finalized (would overwrite the on-disk file on rename). Indicates scanner-vs-writer timing drift — tune finalize_grace_ms or flush_interval_ms.",
+		}, []string{"sink"})
 		NATSDeliveryErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "writer_nats_delivery_errors_total"}, []string{"kind"})
 		ActiveScans = prometheus.NewGauge(prometheus.GaugeOpts{Name: "writer_active_scans"})
 		BuildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "writer_build_info"}, []string{"version", "commit", "proto_version"})
@@ -70,6 +75,7 @@ func Init() {
 		for _, c := range []prometheus.Collector{
 			FindingsConsumed, FindingsWriteSeconds, SinkWrites, SinkErrors, SinkFormatIgnored,
 			SinkFlushSeconds, SinkFlushTotal, SinkFlushBatchSize, SinkPendingFindings,
+			SinkPostFinalizeDropped,
 			NATSDeliveryErrors, ActiveScans, BuildInfo, OrphanTempfilesSwept,
 		} {
 			registry.MustRegister(c)
@@ -86,6 +92,7 @@ func Init() {
 		SinkFlushTotal.WithLabelValues("", "")
 		SinkFlushBatchSize.WithLabelValues("")
 		SinkPendingFindings.WithLabelValues("")
+		SinkPostFinalizeDropped.WithLabelValues("")
 		NATSDeliveryErrors.WithLabelValues("")
 	})
 }

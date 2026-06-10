@@ -130,6 +130,52 @@ func TestParquet_RejectsInvalidScanID(t *testing.T) {
 	}
 }
 
+func TestParquet_PostFinalizeWritesAreDropped(t *testing.T) {
+	dir := t.TempDir()
+	p, err := NewParquet(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	ctx := context.Background()
+
+	// Burst of findings + finalize.
+	for i := 0; i < 3; i++ {
+		if err := p.Write(ctx, &v1.Finding{ScanId: "late", FindingId: "f", RuleId: "x", Severity: v1.Severity_LOW, FilePath: "a"}); err != nil {
+			t.Fatalf("pre-finalize write %d: %v", i, err)
+		}
+	}
+	if err := p.Finalize(ctx, "late"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	finalPath := filepath.Join(dir, "late.parquet")
+	before, err := parquet.ReadFile[parquetRow](finalPath)
+	if err != nil {
+		t.Fatalf("ReadFile pre-stragglers: %v", err)
+	}
+	if len(before) != 3 {
+		t.Fatalf("pre-stragglers row count = %d, want 3", len(before))
+	}
+
+	// Stragglers arriving post-finalize must be silently dropped — NOT
+	// open a second writer that would clobber the existing file on rename.
+	for i := 0; i < 5; i++ {
+		if err := p.Write(ctx, &v1.Finding{ScanId: "late", FindingId: "f", RuleId: "x", Severity: v1.Severity_LOW, FilePath: "a"}); err != nil {
+			t.Fatalf("post-finalize write %d: %v (want nil; drop should be silent)", i, err)
+		}
+	}
+
+	// File must still hold exactly the pre-finalize rows.
+	after, err := parquet.ReadFile[parquetRow](finalPath)
+	if err != nil {
+		t.Fatalf("ReadFile post-stragglers: %v", err)
+	}
+	if len(after) != 3 {
+		t.Fatalf("post-stragglers row count = %d, want 3 (file was clobbered by re-open)", len(after))
+	}
+}
+
 func TestParquet_PerScanCap(t *testing.T) {
 	dir := t.TempDir()
 	p, err := NewParquetN(dir, 2)

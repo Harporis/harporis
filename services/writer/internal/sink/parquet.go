@@ -99,10 +99,30 @@ type Parquet struct {
 	mu     sync.Mutex
 	closed bool
 	scans  map[string]*parquetScanState
+	// finalized remembers scan_ids whose parquet file is already on
+	// disk so a late Write (scanner straggling past getter's terminal
+	// status event + idle-sweeper-driven finalize) doesn't open a
+	// SECOND writer for the same scan and clobber the first file on
+	// rename. Late Writes for a finalized scan are dropped with a
+	// SinkPostFinalizeDropped bump so operators can spot the problem
+	// and tune timing (finalize_grace_ms / idle_timeout) accordingly.
+	//
+	// Bounded at parquetFinalizedCap (FIFO) so it cannot grow
+	// without bound under a continuous workload — old entries fall
+	// off once the cap is hit. Tradeoff: a scan whose ID rotates out
+	// of the window can re-open, but a scan that gets a stray Write
+	// hours after finalize is pathological anyway (scanner bug).
+	finalized      map[string]struct{}
+	finalizedOrder []string
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
+
+// parquetFinalizedCap bounds the post-finalize set. Sized for the
+// "thousands of scans/hour" envelope; small enough to keep the FIFO
+// eviction loop O(1) per insert.
+const parquetFinalizedCap = 4096
 
 // SetReplicaID stamps replica_id into the per-scan final filename.
 // Call once before any Write; never thread-safe vs. concurrent Writes.
@@ -152,10 +172,26 @@ func NewParquetN(rootDir string, maxPerScan int) (*Parquet, error) {
 	return NewParquetConfig(rootDir, BatchConfig{MaxPerScan: maxPerScan})
 }
 
+// parquetMinIdleTimeout is the floor for the idle sweeper. Writer
+// configs typically set flush_interval_ms=2s for accumulator
+// freshness, but for streaming Parquet the same value finalises while
+// scanner stragglers are still in flight (terminal-status with
+// finalize_grace_ms=10s arrives WAY after a 2s idle sweep), causing
+// findings to drop into the post-finalize bucket. The idle sweeper
+// is a BACKSTOP for the case where terminal-status never arrives;
+// terminal-status + grace is the primary finalization path. So
+// floor idle at 30s to give terminal events ample time to land.
+//
+// Operators can still tighten this by setting flush_interval_ms
+// LARGER than 30s; the floor only kicks in when flush_interval_ms is
+// below it.
+const parquetMinIdleTimeout = 30 * time.Second
+
 // NewParquetConfig accepts a BatchConfig. MaxPerScan caps in-memory
-// rows per scan; FlushInterval is reused as the IDLE TIMEOUT for the
-// per-scan finalisation sweeper. 0 disables the sweeper (only the
-// HARPORIS_STATUS terminal Finalize or sink Close drains).
+// rows per scan; FlushInterval becomes the IDLE TIMEOUT for the
+// per-scan finalisation sweeper, floored at parquetMinIdleTimeout to
+// keep the sweeper a backstop (primary path is terminal-status +
+// finalize_grace_ms). 0 disables the sweeper entirely.
 func NewParquetConfig(rootDir string, cfg BatchConfig) (*Parquet, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
@@ -171,11 +207,16 @@ func NewParquetConfig(rootDir string, cfg BatchConfig) (*Parquet, error) {
 	// its own NewBatchedAccumulator — keep parity so any caller, e.g.
 	// writer-rebuild, works without a separate metrics setup step).
 	metrics.Init()
+	idleTimeout := cfg.FlushInterval
+	if idleTimeout > 0 && idleTimeout < parquetMinIdleTimeout {
+		idleTimeout = parquetMinIdleTimeout
+	}
 	p := &Parquet{
 		rootDir:     rootDir,
 		maxPerScan:  cfg.MaxPerScan,
-		idleTimeout: cfg.FlushInterval,
+		idleTimeout: idleTimeout,
 		scans:       make(map[string]*parquetScanState),
+		finalized:   make(map[string]struct{}, parquetFinalizedCap),
 		stopCh:      make(chan struct{}),
 	}
 	if p.idleTimeout > 0 {
@@ -207,6 +248,15 @@ func (p *Parquet) Write(ctx context.Context, f *v1.Finding) error {
 	if p.closed {
 		p.mu.Unlock()
 		return ErrSinkClosed
+	}
+	// Stragglers arriving after finalize are dropped — opening a second
+	// writer would silently overwrite the existing file on rename.
+	// Surfaced via metric so operators can spot scanner-vs-writer
+	// timing drift and tune finalize_grace_ms / flush_interval_ms.
+	if _, done := p.finalized[f.ScanId]; done {
+		p.mu.Unlock()
+		metrics.SinkPostFinalizeDropped.WithLabelValues(parquetSinkLabel).Inc()
+		return nil
 	}
 	s, ok := p.scans[f.ScanId]
 	if !ok {
@@ -255,8 +305,26 @@ func (p *Parquet) Finalize(_ context.Context, scanID string) error {
 		return nil
 	}
 	delete(p.scans, scanID)
+	p.markFinalizedLocked(scanID)
 	p.mu.Unlock()
 	return s.closeAndRename("terminal")
+}
+
+// markFinalizedLocked records scanID as finalized so subsequent Writes
+// drop instead of opening a fresh writer that would clobber the file
+// on disk. Bounded FIFO eviction at parquetFinalizedCap so the set
+// can't grow unbounded under continuous workloads. Caller must hold p.mu.
+func (p *Parquet) markFinalizedLocked(scanID string) {
+	if _, exists := p.finalized[scanID]; exists {
+		return
+	}
+	p.finalized[scanID] = struct{}{}
+	p.finalizedOrder = append(p.finalizedOrder, scanID)
+	for len(p.finalizedOrder) > parquetFinalizedCap {
+		evict := p.finalizedOrder[0]
+		p.finalizedOrder = p.finalizedOrder[1:]
+		delete(p.finalized, evict)
+	}
 }
 
 // Close drains every still-open scan (writes Parquet footers + renames
@@ -324,6 +392,7 @@ func (p *Parquet) finalizeIdleLocked() {
 		if idle {
 			toFinalize = append(toFinalize, s)
 			delete(p.scans, id)
+			p.markFinalizedLocked(id)
 		}
 	}
 	p.mu.Unlock()
