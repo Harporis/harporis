@@ -24,9 +24,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
+	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 // SARIFDefaultMaxPerScan caps the in-memory findings accumulator per scan.
@@ -100,7 +102,10 @@ func (s *SARIF) Write(ctx context.Context, f *v1.Finding) error {
 	copy(snapshot, findings)
 	s.mu.Unlock()
 
-	return s.flush(f.ScanId, snapshot)
+	start := time.Now()
+	err := s.flush(f.ScanId, snapshot)
+	metrics.ObserveFlush(s.Name(), 1, "batch", time.Since(start).Seconds())
+	return err
 }
 
 // Close discards in-memory accumulators. Files on disk are left in their

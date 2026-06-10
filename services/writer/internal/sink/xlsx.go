@@ -17,11 +17,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	xlsxlib "github.com/xuri/excelize/v2"
 
 	kitscan "github.com/Harporis/harporis/kit/scan"
+	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 const XLSXDefaultMaxPerScan = 10_000
@@ -163,7 +165,10 @@ func (x *XLSX) Write(ctx context.Context, f *v1.Finding) error {
 	snapshot := make([]*v1.Finding, len(findings))
 	copy(snapshot, findings)
 	x.mu.Unlock()
-	return x.flush(f.ScanId, snapshot)
+	start := time.Now()
+	err := x.flush(f.ScanId, snapshot)
+	metrics.ObserveFlush(x.Name(), 1, "batch", time.Since(start).Seconds())
+	return err
 }
 
 func (x *XLSX) Close() error {

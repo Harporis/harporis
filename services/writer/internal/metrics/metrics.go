@@ -18,6 +18,10 @@ var (
 	SinkWrites             *prometheus.CounterVec   // labels: sink, severity
 	SinkErrors             *prometheus.CounterVec   // labels: sink, reason
 	SinkFormatIgnored      *prometheus.CounterVec   // labels: requested_format
+	SinkFlushSeconds       *prometheus.HistogramVec // labels: sink
+	SinkFlushTotal         *prometheus.CounterVec   // labels: sink, trigger
+	SinkFlushBatchSize     *prometheus.HistogramVec // labels: sink
+	SinkPendingFindings    *prometheus.GaugeVec     // labels: sink
 	NATSDeliveryErrors     *prometheus.CounterVec   // labels: kind
 	ActiveScans            prometheus.Gauge
 	BuildInfo              *prometheus.GaugeVec // labels: version, commit, proto_version
@@ -38,6 +42,24 @@ func Init() {
 			Name: "writer_sink_format_ignored_total",
 			Help: "Findings whose per-scan -f named a format that has no enabled sink (e.g. `-f pdf` while pdf_enabled=false).",
 		}, []string{"requested_format"})
+		SinkFlushSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "writer_sink_flush_seconds",
+			Help:    "Time the accumulator sinks (SARIF/HTML/XLSX/PDF/Parquet) spend rendering + atomically renaming a per-scan file. NDJSON streams and does NOT contribute.",
+			Buckets: []float64{.0005, .001, .002, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
+		}, []string{"sink"})
+		SinkFlushTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "writer_sink_flush_total",
+			Help: "Accumulator-sink flushes by trigger: `batch` (count threshold), `interval` (periodic ticker), `close` (final flush on shutdown).",
+		}, []string{"sink", "trigger"})
+		SinkFlushBatchSize = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "writer_sink_flush_batch_size",
+			Help:    "Number of NEW findings coalesced into a single accumulator-sink flush.",
+			Buckets: []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000},
+		}, []string{"sink"})
+		SinkPendingFindings = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "writer_sink_pending_findings",
+			Help: "Findings accumulated in memory but not yet flushed to disk (sum across all live scans, per sink).",
+		}, []string{"sink"})
 		NATSDeliveryErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "writer_nats_delivery_errors_total"}, []string{"kind"})
 		ActiveScans = prometheus.NewGauge(prometheus.GaugeOpts{Name: "writer_active_scans"})
 		BuildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "writer_build_info"}, []string{"version", "commit", "proto_version"})
@@ -47,6 +69,7 @@ func Init() {
 		})
 		for _, c := range []prometheus.Collector{
 			FindingsConsumed, FindingsWriteSeconds, SinkWrites, SinkErrors, SinkFormatIgnored,
+			SinkFlushSeconds, SinkFlushTotal, SinkFlushBatchSize, SinkPendingFindings,
 			NATSDeliveryErrors, ActiveScans, BuildInfo, OrphanTempfilesSwept,
 		} {
 			registry.MustRegister(c)
@@ -59,6 +82,10 @@ func Init() {
 		SinkWrites.WithLabelValues("", "")
 		SinkErrors.WithLabelValues("", "")
 		SinkFormatIgnored.WithLabelValues("")
+		SinkFlushSeconds.WithLabelValues("")
+		SinkFlushTotal.WithLabelValues("", "")
+		SinkFlushBatchSize.WithLabelValues("")
+		SinkPendingFindings.WithLabelValues("")
 		NATSDeliveryErrors.WithLabelValues("")
 	})
 }
@@ -66,6 +93,17 @@ func Init() {
 // Handler returns the /metrics HTTP handler bound to the package's custom registry.
 func Handler() http.Handler {
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+}
+
+// ObserveFlush is a one-shot helper for accumulator sinks that want to
+// emit all four flush metrics from a single call site. trigger is one
+// of "batch" / "interval" / "close". Calls Init() so sinks can emit
+// metrics from unit tests without an explicit metrics setup step.
+func ObserveFlush(sinkName string, batchSize int, trigger string, dur float64) {
+	Init()
+	SinkFlushSeconds.WithLabelValues(sinkName).Observe(dur)
+	SinkFlushTotal.WithLabelValues(sinkName, trigger).Inc()
+	SinkFlushBatchSize.WithLabelValues(sinkName).Observe(float64(batchSize))
 }
 
 // Registry exposes the custom registry for tests that need to Gather() directly.

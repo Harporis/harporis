@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/signintech/gopdf"
 	"golang.org/x/image/font/gofont/gobold"
@@ -26,6 +27,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
+	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 const PDFDefaultMaxPerScan = 10_000
@@ -91,7 +93,10 @@ func (p *PDF) Write(ctx context.Context, f *v1.Finding) error {
 	snapshot := make([]*v1.Finding, len(findings))
 	copy(snapshot, findings)
 	p.mu.Unlock()
-	return p.flush(f.ScanId, snapshot)
+	start := time.Now()
+	err := p.flush(f.ScanId, snapshot)
+	metrics.ObserveFlush(p.Name(), 1, "batch", time.Since(start).Seconds())
+	return err
 }
 
 func (p *PDF) Close() error {

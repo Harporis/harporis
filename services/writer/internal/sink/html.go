@@ -17,9 +17,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
+	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
 // HTMLDefaultMaxPerScan matches SARIF's cap — keeps memory bounded
@@ -88,7 +90,10 @@ func (h *HTML) Write(ctx context.Context, f *v1.Finding) error {
 	snapshot := make([]*v1.Finding, len(findings))
 	copy(snapshot, findings)
 	h.mu.Unlock()
-	return h.flush(f.ScanId, snapshot)
+	start := time.Now()
+	err := h.flush(f.ScanId, snapshot)
+	metrics.ObserveFlush(h.Name(), 1, "batch", time.Since(start).Seconds())
+	return err
 }
 
 func (h *HTML) Close() error {
