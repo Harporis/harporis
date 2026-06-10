@@ -166,6 +166,11 @@ func NewParquetConfig(rootDir string, cfg BatchConfig) (*Parquet, error) {
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
+	// Ensure the Prometheus collectors exist before Write() reaches for
+	// SinkPendingFindings (the accumulator constructor does the same in
+	// its own NewBatchedAccumulator — keep parity so any caller, e.g.
+	// writer-rebuild, works without a separate metrics setup step).
+	metrics.Init()
 	p := &Parquet{
 		rootDir:     rootDir,
 		maxPerScan:  cfg.MaxPerScan,
