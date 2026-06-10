@@ -131,3 +131,134 @@
   tags: [generic]
   examples:
     positive: ["api_key=3xq8Z1nQpvP7tk+aWoH4mc5XyL2jKBVe", "password: 'sP9a7nLpQ2v5Z3wXq8rE6T'"]
+
+- id: openai-api-key
+  description: OpenAI API key (sk-... 48+ chars)
+  severity: critical
+  regex: '\bsk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}\b'
+  tags: [openai, ai, llm]
+  examples:
+    positive: ["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"]
+    negative: ["sk-tooshort", "sk-noT3BlbkFJmarker1234567890abcdefghij1234567890"]
+
+- id: openai-project-key
+  description: OpenAI project-scoped API key (sk-proj-...)
+  severity: critical
+  regex: '\bsk-proj-[A-Za-z0-9_-]{40,}\b'
+  tags: [openai, ai, llm]
+  examples:
+    positive: ["sk-proj-abc123def456ghi789jklmnopqrstuvwxyzABCDEF123"]
+    negative: ["sk-proj-short"]
+
+- id: anthropic-api-key
+  description: Anthropic Claude API key (sk-ant-api03-... range covers current + slight forward drift)
+  severity: critical
+  regex: '\bsk-ant-api03-[A-Za-z0-9_-]{90,108}\b'
+  tags: [anthropic, ai, llm]
+  examples:
+    positive: ["sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_-abcdefghijklmnopqrstuv0123"]
+    negative: ["sk-ant-api03-short", "sk-ant-api02-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_-abcdefghijklmnopqrstuv0123"]
+
+- id: sendgrid-api-key
+  description: SendGrid API key (SG.<id>.<secret>)
+  severity: critical
+  regex: '\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43,55}\b'
+  tags: [sendgrid, email]
+  examples:
+    positive: ["SG.abcdefghijklmnopqrstuv.abcdefghijklmnopqrstuvwxyz0123456789-_ABCDEF"]
+    negative: ["SG.short.key", "SG..key"]
+
+- id: twilio-account-sid
+  description: Twilio Account SID (AC + 32 hex chars)
+  severity: high
+  regex: '\bAC[a-f0-9]{32}\b'
+  tags: [twilio, telephony]
+  examples:
+    positive: ["AC1234567890abcdef1234567890abcdef"]
+    negative: ["ACtoo-short", "BC1234567890abcdef1234567890abcdef"]
+
+- id: twilio-api-key
+  description: Twilio API key SID (SK + 32 hex chars)
+  severity: high
+  regex: '\bSK[a-f0-9]{32}\b'
+  tags: [twilio, telephony]
+  examples:
+    positive: ["SK1234567890abcdef1234567890abcdef"]
+    negative: ["SKtoo-short"]
+
+- id: npm-access-token
+  description: npm registry access token (npm_<36-char base62>)
+  severity: critical
+  regex: '\bnpm_[A-Za-z0-9]{36}\b'
+  tags: [npm, registry]
+  examples:
+    positive: ["npm_abcdefghijklmnopqrstuvwxyz0123456789"]
+    negative: ["npm_short"]
+
+- id: pypi-upload-token
+  description: PyPI upload token (pypi-AgEIcHl... opaque base64url)
+  severity: critical
+  regex: '\bpypi-AgEIcHlwaS5vcmcC[A-Za-z0-9_-]{50,}\b'
+  tags: [pypi, registry]
+  examples:
+    positive: ["pypi-AgEIcHlwaS5vcmcCabcdefghijklmnopqrstuvwxyz0123456789-_ABCDEFGHIJKLMNOP"]
+    negative: ["pypi-short", "pypi-AgEIcHlwaS5vcmcCshort"]
+
+- id: cloudflare-api-token
+  description: Cloudflare API token (CF_API_TOKEN, 40 chars URL-safe)
+  severity: high
+  regex: '(?i)(cf[_-]?api[_-]?token|cloudflare[_-]?api[_-]?token)\s*[:=]\s*[''"]?([A-Za-z0-9_-]{40})[''"]?'
+  secret_group: 2
+  entropy:
+    min: 4.5
+    target_group: 2
+  tags: [cloudflare]
+  examples:
+    positive: ["CF_API_TOKEN=v10-3xQ7zN8KpL4mWj9Bv2Yr5cT6dF1aE0qXwUiOpAsD"]
+    negative: ["CF_API_TOKEN=tooshort", "FOO_TOKEN=v10-3xQ7zN8KpL4mWj9Bv2Yr5cT6dF1aE0qXwUiOpAsD"]
+
+- id: discord-bot-token
+  description: Discord bot token (3 base64url segments separated by '.')
+  severity: critical
+  regex: '\b[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b'
+  tags: [discord, bot]
+  examples:
+    positive: ["MTIzNDU2Nzg5MDEyMzQ1Njc4.AbCdEf.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123"]
+    negative: ["NTIzNDU2Nzg5MDEyMzQ1Njc4.short.bla"]
+
+- id: heroku-api-key
+  description: Heroku API key (UUID v4 in HEROKU_API_KEY or assignment)
+  severity: high
+  regex: '(?i)heroku[_-]?api[_-]?key\s*[:=]\s*[''"]?([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})[''"]?'
+  secret_group: 1
+  tags: [heroku]
+  examples:
+    positive: ["HEROKU_API_KEY=12345678-1234-4567-8901-123456789012"]
+    negative: ["HEROKU_API_KEY=not-a-uuid"]
+
+- id: square-access-token
+  description: Square access token (EAAA + 60 chars)
+  severity: critical
+  regex: '\bEAAA[A-Za-z0-9_-]{60}\b'
+  tags: [square, payments]
+  examples:
+    positive: ["EAAAabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWX"]
+    negative: ["EAAAshort"]
+
+- id: telegram-bot-token
+  description: Telegram bot token (<digits>:<35-char base64url>)
+  severity: high
+  regex: '\b[0-9]{8,11}:[A-Za-z0-9_-]{35}\b'
+  tags: [telegram, bot]
+  examples:
+    positive: ["123456789:AAFmkLqIuYzXcVbNm0987654321qwertyui"]
+    negative: ["123:short", "1234567:AAFmkLqIuYzXcVbNm0987654321qwertyui"]
+
+- id: mailgun-api-key
+  description: Mailgun API key (key-<32-hex>)
+  severity: high
+  regex: '\bkey-[a-f0-9]{32}\b'
+  tags: [mailgun, email]
+  examples:
+    positive: ["key-abcdef1234567890abcdef1234567890"]
+    negative: ["key-short"]
