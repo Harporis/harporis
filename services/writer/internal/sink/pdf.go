@@ -79,6 +79,11 @@ func (p *PDF) Close() error { return p.acc.Close() }
 
 func (p *PDF) Flush() error { return p.acc.Flush() }
 
+// Finalize drains the pending buffer for scanID and drops state.
+func (p *PDF) Finalize(_ context.Context, scanID string) error {
+	return p.acc.Finalize(scanID)
+}
+
 // pdfStripControl makes a string safe for the PDF row: Go font covers
 // the Basic Multilingual Plane but Helvetica-style fallbacks for
 // non-printables look like boxes; collapsing to '.' / ' ' keeps the

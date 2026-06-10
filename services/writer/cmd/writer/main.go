@@ -157,6 +157,18 @@ func main() {
 	}
 	h.SetConsumerCreated(true)
 
+	// Status consumer: listens for terminal ScanState events on
+	// HARPORIS_STATUS and dispatches Finalize to every sink that
+	// implements it (streaming Parquet, plus the accumulator sinks
+	// drain their final batch deterministically instead of waiting on
+	// the 2s ticker). Each writer replica gets an EPHEMERAL consumer
+	// so finalisation is per-replica (a replica only knows about scans
+	// it Wrote to).
+	statusSub, err := writernats.NewStatusConsumer(cl.JS, version.Version)
+	if err != nil {
+		fatal("create status consumer: %v", err)
+	}
+
 	// Worker goroutines.
 	var workerWG sync.WaitGroup
 	for i := 0; i < cfg.Workers; i++ {
@@ -201,6 +213,39 @@ func main() {
 		}(i)
 	}
 
+	// Status fan-out goroutine. Terminal events trigger a DELAYED
+	// Finalize via time.AfterFunc — the cfg.FinalizeGraceMs grace
+	// window buys the rest of the pipeline (scanner draining chunks
+	// → publishing findings → writer Acking them) time to settle
+	// after getter's "scan finished" event arrives.
+	grace := time.Duration(cfg.FinalizeGraceMs) * time.Millisecond
+	var statusWG sync.WaitGroup
+	statusWG.Add(1)
+	go func() {
+		defer statusWG.Done()
+		runErr := statusSub.Run(rootCtx, func(_ context.Context, scanID string, _ v1.ScanState) error {
+			id := scanID
+			time.AfterFunc(grace, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				for _, out := range sinks {
+					fin, ok := out.(sink.Finalizer)
+					if !ok {
+						continue
+					}
+					if err := fin.Finalize(ctx, id); err != nil {
+						metrics.SinkErrors.WithLabelValues(out.Name(), "finalize_error").Inc()
+						slog.Warn("finalize error", "sink", out.Name(), "scan_id", id, "err", err)
+					}
+				}
+			})
+			return nil
+		})
+		if runErr != nil {
+			slog.Error("status consumer exit", "err", runErr)
+		}
+	}()
+
 	// HTTP server: /metrics from writer, /healthz + /readyz from kit/health.
 	srv := kithttpserver.ServeAsync(rootCtx, cfg.MetricsAddr, metrics.Handler(), h.HealthzHandler(), h.ReadyzHandler())
 
@@ -215,10 +260,12 @@ func main() {
 	defer sc()
 
 	_ = consumer.Drain()
+	_ = statusSub.Drain()
 
 	done := make(chan struct{})
 	go func() {
 		workerWG.Wait()
+		statusWG.Wait()
 		close(done)
 	}()
 	select {

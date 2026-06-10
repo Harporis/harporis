@@ -93,6 +93,13 @@ func (s *SARIF) Close() error { return s.acc.Close() }
 // tests that don't want to wait on the ticker.
 func (s *SARIF) Flush() error { return s.acc.Flush() }
 
+// Finalize delivers the per-scan terminal-state signal: drains any
+// pending buffer and drops in-memory state for scanID. The SARIF file
+// on disk reflects the final result.
+func (s *SARIF) Finalize(_ context.Context, scanID string) error {
+	return s.acc.Finalize(scanID)
+}
+
 func (s *SARIF) flush(scanID string, findings []*v1.Finding) error {
 	path := filepath.Join(s.rootDir, scanID+".sarif")
 	rootClean := filepath.Clean(s.rootDir)

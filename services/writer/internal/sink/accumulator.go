@@ -175,6 +175,37 @@ func (a *BatchedAccumulator) Close() error {
 	return firstErr
 }
 
+// Finalize flushes the pending buffer for scanID (if any) and drops
+// the per-scan state — releasing the memory and letting subsequent
+// Adds for the same scan_id re-accumulate from zero. Called by the
+// writer when a terminal ScanState event is observed on
+// HARPORIS_STATUS. Safe to call for unknown scan_ids (no-op).
+func (a *BatchedAccumulator) Finalize(scanID string) error {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return ErrSinkClosed
+	}
+	s, ok := a.scans[scanID]
+	if !ok {
+		a.mu.Unlock()
+		return nil
+	}
+	var snapshot []*v1.Finding
+	var count int
+	if s.pendingCount > 0 {
+		snapshot = append([]*v1.Finding(nil), s.findings...)
+		count = s.pendingCount
+	}
+	delete(a.scans, scanID)
+	a.mu.Unlock()
+
+	if snapshot != nil {
+		return a.doFlush(scanID, snapshot, count, "terminal")
+	}
+	return nil
+}
+
 // Flush forces a flush of every dirty buffer. Useful for tests that
 // don't want to wait on the ticker.
 func (a *BatchedAccumulator) Flush() error {

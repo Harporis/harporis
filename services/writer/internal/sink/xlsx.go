@@ -71,6 +71,11 @@ func (x *XLSX) Close() error { return x.acc.Close() }
 
 func (x *XLSX) Flush() error { return x.acc.Flush() }
 
+// Finalize drains the pending buffer for scanID and drops state.
+func (x *XLSX) Finalize(_ context.Context, scanID string) error {
+	return x.acc.Finalize(scanID)
+}
+
 // writeXLSXSummary populates the Summary sheet with per-severity totals
 // + a per-rule breakdown. Layout: two stacked tables separated by a
 // blank row so a copy-paste into a doc carries the structure.

@@ -40,6 +40,11 @@ type Config struct {
 	// FlushIntervalMs — periodic ticker that catches idle buffers so
 	// partial-scan reports stay fresh; 0 disables the ticker.
 	FlushIntervalMs int `yaml:"flush_interval_ms"`
+	// FinalizeGraceMs — delay between observing a terminal ScanState
+	// event on HARPORIS_STATUS and actually calling Finalize on the
+	// sinks. Buys the pipeline (scanner → writer) time to drain after
+	// getter's "scan finished" event arrives at writer.
+	FinalizeGraceMs int `yaml:"finalize_grace_ms"`
 	// MaskSecrets, when true, renders matched_secret as first-4 chars +
 	// "***" in human-facing sinks (HTML + PDF). NDJSON/SARIF/XLSX still
 	// carry the raw secret because their primary use cases (jq
@@ -120,6 +125,9 @@ func applyDefaults(c *Config) {
 	}
 	if c.FlushIntervalMs <= 0 {
 		c.FlushIntervalMs = 2000
+	}
+	if c.FinalizeGraceMs <= 0 {
+		c.FinalizeGraceMs = 10_000
 	}
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceWriter])

@@ -76,6 +76,11 @@ func (h *HTML) Close() error { return h.acc.Close() }
 
 func (h *HTML) Flush() error { return h.acc.Flush() }
 
+// Finalize drains the pending buffer for scanID and drops state.
+func (h *HTML) Finalize(_ context.Context, scanID string) error {
+	return h.acc.Finalize(scanID)
+}
+
 func (h *HTML) flush(scanID string, findings []*v1.Finding) error {
 	path := filepath.Join(h.rootDir, scanID+".html")
 	rootClean := filepath.Clean(h.rootDir)

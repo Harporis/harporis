@@ -25,5 +25,13 @@ mask_secrets: false         # when true, HTML+PDF render secret[:4] + "***" (NDJ
 # legacy "render-on-every-write" behaviour.
 flush_batch: 50             # findings per accumulator-sink flush
 flush_interval_ms: 2000     # backstop ticker; 0 = disable
+# Time to wait after observing a terminal ScanState event on
+# HARPORIS_STATUS before calling Finalize on the sinks. Getter
+# emits COMPLETED the moment it finishes publishing chunks, but
+# scanner is still draining its pipeline at that point; without
+# grace, Finalize would close streaming Parquet (and drop accumulator
+# state) before the last findings arrive. Default 10 s suits scans
+# up to ~5 k findings on typical hardware.
+finalize_grace_ms: 10000
 metrics_addr: ":9102"
 log_level: "${LOG_LEVEL:-info}"
