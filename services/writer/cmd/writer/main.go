@@ -105,6 +105,12 @@ func main() {
 		if err != nil {
 			fatal("init parquet sink: %v", err)
 		}
+		// Stamp replica id into the per-scan filename so multiple
+		// writer replicas don't race to rename onto the same path.
+		// HOSTNAME is set by docker compose to the container name.
+		if rid := os.Getenv("HOSTNAME"); rid != "" {
+			pq.SetReplicaID(rid)
+		}
 		sinks = append(sinks, pq)
 	}
 	if len(sinks) == 0 {

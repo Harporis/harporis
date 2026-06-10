@@ -80,6 +80,15 @@ type Parquet struct {
 	rootDir     string
 	maxPerScan  int
 	idleTimeout time.Duration
+	// replicaID disambiguates the per-scan final filename across writer
+	// replicas. Empty string keeps the legacy single-file shape
+	// (`<scan_id>.parquet`); non-empty stamps `<scan_id>.<replica_id>
+	// .parquet` so each replica's output lives in its own file and the
+	// "two replicas race to rename onto the same path" bug from
+	// multi-replica deployments goes away. Operators with N>1 writer
+	// replicas DuckDB-UNION the per-replica files for the full view:
+	// `SELECT * FROM read_parquet('<scan_id>.*.parquet')`.
+	replicaID string
 
 	mu     sync.Mutex
 	closed bool
@@ -88,6 +97,10 @@ type Parquet struct {
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
+
+// SetReplicaID stamps replica_id into the per-scan final filename.
+// Call once before any Write; never thread-safe vs. concurrent Writes.
+func (p *Parquet) SetReplicaID(id string) { p.replicaID = id }
 
 // parquetScanState owns one open GenericWriter + its tempfile for one
 // scan_id. mu serialises Write/Close (parquet-go's GenericWriter is
@@ -316,7 +329,11 @@ func (p *Parquet) finalizeIdleLocked() {
 func (p *Parquet) Flush() error { return nil }
 
 func (p *Parquet) newScanState(scanID string) (*parquetScanState, error) {
-	finalPath := filepath.Join(p.rootDir, scanID+".parquet")
+	finalName := scanID + ".parquet"
+	if p.replicaID != "" {
+		finalName = scanID + "." + p.replicaID + ".parquet"
+	}
+	finalPath := filepath.Join(p.rootDir, finalName)
 	rootClean := filepath.Clean(p.rootDir)
 	if !strings.HasPrefix(filepath.Clean(finalPath), rootClean+string(filepath.Separator)) {
 		return nil, fmt.Errorf("sink: path %q escapes rootDir %q", finalPath, p.rootDir)
