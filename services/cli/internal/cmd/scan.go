@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	"github.com/Harporis/harporis/services/cli/internal/compose"
 	"github.com/Harporis/harporis/services/cli/internal/natscli"
 )
 
@@ -40,6 +43,7 @@ func newScanCmd() *cobra.Command {
 		initTo, commit, rangeSpec                string
 		formatHelp                               bool
 		idleTimeout                              time.Duration
+		outputDir                                string
 	)
 	c := &cobra.Command{
 		Use:   "scan",
@@ -126,9 +130,18 @@ func newScanCmd() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "submitted scan_id=%s type=%s\n", req.ScanId, typ.String())
 			if noWait {
+				if outputDir != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "--output-dir is ignored with --no-wait (no terminal state to copy after)")
+				}
 				return nil
 			}
-			return StreamStatusLines(cmd.OutOrStdout(), cl, req.ScanId, idleTimeout)
+			if err := StreamStatusLines(cmd.OutOrStdout(), cl, req.ScanId, idleTimeout); err != nil {
+				return err
+			}
+			if outputDir != "" {
+				return copyFindingsToHost(cmd.OutOrStdout(), req.ScanId, outputDir)
+			}
+			return nil
 		},
 	}
 	c.Flags().StringVar(&scanID, "scan-id", "", "scan id (default: generated UUID)")
@@ -152,7 +165,124 @@ func newScanCmd() *cobra.Command {
 	c.Flags().StringVar(&commit, "commit", "", "shortcut for --type commit_range scanning a single commit's diff (sha~1 → sha)")
 	c.Flags().StringVar(&rangeSpec, "range", "", "shortcut for --type commit_range using git A..B syntax")
 	c.Flags().BoolVar(&formatHelp, "format-help", false, "print the difference between `scan -f` (writer-side) and `findings show -f` (read-side) format sets and exit")
+	c.Flags().StringVarP(&outputDir, "output-dir", "o", "", "after the scan completes, copy every <scan_id>.<ext> file from the writer container into this host directory (created if missing). Polls until files stabilize past finalize_grace_ms.")
 	return c
+}
+
+// copyFindingsToHost waits for writer-side finalization to settle, then
+// copies every <scan_id>.* file from the writer container into dst.
+// Sequence:
+//  1. Sleep `findingsCopyInitialDelay` (default 12s) — covers the
+//     writer's default finalize_grace_ms (10s) plus a small buffer
+//     for the slowest sink (Parquet rename).
+//  2. Poll the writer's findings dir; treat the file list as stable
+//     once two consecutive snapshots match, bounded by
+//     `findingsCopyMaxWait`.
+//
+// The initial delay is what makes this reliable: NDJSON streams and
+// appears immediately, but the accumulator + Parquet sinks only
+// produce their final file after finalize_grace_ms. Without the wait,
+// the early `ls` snapshot would lock in NDJSON-only as "stable".
+func copyFindingsToHost(out io.Writer, scanID, dst string) error {
+	dst = filepath.Clean(dst)
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("mkdir output dir %s: %w", dst, err)
+	}
+	co, err := compose.NewDefault()
+	if err != nil {
+		return fmt.Errorf("docker compose not available: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), findingsCopyMaxWait)
+	defer cancel()
+
+	files, err := waitForFindingsStable(ctx, co, scanID)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		fmt.Fprintf(out, "no findings files matched scan_id=%s in writer's findings dir\n", scanID)
+		return nil
+	}
+
+	copied := 0
+	for _, name := range files {
+		src := "/var/lib/harporis/findings/" + name
+		hostPath := filepath.Join(dst, name)
+		if cerr := co.CopyFromContainer(ctx, "writer", src, hostPath); cerr != nil {
+			return fmt.Errorf("copy %s: %w", name, cerr)
+		}
+		copied++
+	}
+	fmt.Fprintf(out, "copied %d file(s) for scan_id=%s into %s\n", copied, scanID, dst)
+	return nil
+}
+
+const (
+	// findingsCopyInitialDelay is the unconditional wait after terminal
+	// state before the first `ls` probe. Tuned to cover the default
+	// writer finalize_grace_ms (10s) plus a small slack so the
+	// slowest sink (Parquet rename) is on disk by the first snapshot.
+	findingsCopyInitialDelay = 12 * time.Second
+	// findingsCopyMaxWait bounds the total time spent waiting +
+	// polling after terminal state. Must be >> findingsCopyInitialDelay.
+	findingsCopyMaxWait = 30 * time.Second
+	// findingsCopyPollInterval is the cadence at which `ls` is re-probed;
+	// stability = two identical snapshots in a row.
+	findingsCopyPollInterval = 500 * time.Millisecond
+)
+
+// waitForFindingsStable sleeps `findingsCopyInitialDelay` to clear the
+// writer's finalize-grace window, then polls the findings dir until
+// two consecutive `ls` snapshots scoped to scan_id match. Orphan
+// tempfiles are filtered out before the comparison.
+func waitForFindingsStable(ctx context.Context, co *compose.Compose, scanID string) ([]string, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(findingsCopyInitialDelay):
+	}
+	prev := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timed out waiting for writer to finalize scan %s: %w", scanID, ctx.Err())
+		default:
+		}
+		body, err := co.Exec(ctx, "writer", "ls", "-1", "/var/lib/harporis/findings")
+		if err != nil {
+			return nil, fmt.Errorf("ls writer findings: %w (%s)", err, strings.TrimSpace(body))
+		}
+		matched := filterFindingsForScan(body, scanID)
+		snap := strings.Join(matched, "\n")
+		if snap != "" && snap == prev {
+			return matched, nil
+		}
+		prev = snap
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(findingsCopyPollInterval):
+		}
+	}
+}
+
+// filterFindingsForScan keeps `<scanID>.<ext>` and
+// `<scanID>.<replica>.<ext>` shapes, dropping orphan tempfile patterns
+// and unrelated files.
+func filterFindingsForScan(lsOutput, scanID string) []string {
+	out := []string{}
+	for _, name := range strings.Split(strings.TrimSpace(lsOutput), "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.HasPrefix(name, ".") || strings.Contains(name, ".tmp-") {
+			continue
+		}
+		if name != scanID && !strings.HasPrefix(name, scanID+".") {
+			continue
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // printFormatHelp explains the two -f flag scopes. The submission-side
