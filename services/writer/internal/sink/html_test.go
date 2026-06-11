@@ -28,6 +28,10 @@ func TestHTML_SelfContainedReportPerScan(t *testing.T) {
 			t.Fatalf("Write %s: %v", f.FindingId, err)
 		}
 	}
+	// Streaming sink: file is only valid after Finalize.
+	if err := h.Finalize(ctx, "s1"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
 	body, err := os.ReadFile(filepath.Join(dir, "s1.html"))
 	if err != nil {
 		t.Fatalf("read report: %v", err)
@@ -41,11 +45,11 @@ func TestHTML_SelfContainedReportPerScan(t *testing.T) {
 		"src/.env",
 		"AKIAIOSFODNN7EXAMPLE",
 		"generic",
-		"lib/util.go",                // Refs fallback for empty FilePath
-		"CRITICAL: 1",
-		"LOW: 1",
-		"<script>",                   // inline JS for sort/filter
-		"localeCompare",              // sort code
+		"lib/util.go",                  // Refs fallback for empty FilePath
+		`data-sev="CRITICAL"`,          // severity is now stamped per row;
+		`data-sev="LOW"`,               // counts get rendered by JS at load.
+		"<script>",                     // inline JS for sort/filter
+		"localeCompare",                // sort code
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("report missing %q", want)

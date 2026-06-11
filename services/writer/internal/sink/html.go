@@ -1,35 +1,79 @@
-// HTML sink. Renders findings into a self-contained HTML report (one
-// file per scan_id at <rootDir>/<scan_id>.html). Designed to be
-// "double-click and open in browser" — no external CSS/JS, includes
-// inline sort + filter so an analyst can triage findings without
-// any pipeline tooling.
+// Streaming HTML sink. Renders findings into a self-contained HTML
+// report (one file per scan_id at <rootDir>/<scan_id>.html). Designed
+// to be "double-click and open in browser" — no external CSS/JS,
+// includes inline sort + filter so an analyst can triage findings
+// without any pipeline tooling.
 //
-// Memory model mirrors SARIF: keep an in-memory accumulator per
-// scan_id, capped at maxPerScan, and rewrite the file atomically
-// on every Write so a partial scan is always inspectable.
+// Streaming model:
+//   * On the FIRST Write for a scan_id, the sink opens a tempfile and
+//     writes the HTML head + opening table + `<tbody>`.
+//   * Each subsequent Write appends one `<tr>` (plus an optional
+//     hidden context row) per finding. O(1) amortised per Write;
+//     O(N) total bytes written per scan.
+//   * Finalize closes `</tbody></table>` + the inline JS (sort,
+//     filter, context-toggle, severity-count-from-DOM) + closing
+//     body/html, fsyncs, and renames onto the final path.
+//
+// The inline JS now computes severity counts from rendered rows at
+// page load instead of getting them server-side. That lets the sink
+// stream rows without knowing the final tallies up front.
+
 package sink
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
+	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
-// HTMLDefaultMaxPerScan matches SARIF's cap — keeps memory bounded
-// under runaway producers.
+const htmlSinkLabel = "html_file"
+
+// HTMLDefaultMaxPerScan caps streamed rows per scan. Past this Write
+// returns an error.
 const HTMLDefaultMaxPerScan = 10_000
 
-// HTML emits one HTML report per scan_id to rootDir.
+const htmlMinIdleTimeout = 30 * time.Second
+
+const htmlFinalizedCap = 4096
+
+// HTML emits one streaming .html report per scan_id.
 type HTML struct {
-	rootDir    string
-	maskSecret bool
-	acc        *BatchedAccumulator
+	rootDir     string
+	maxPerScan  int
+	idleTimeout time.Duration
+	replicaID   string
+	maskSecret  bool
+
+	mu             sync.Mutex
+	closed         bool
+	scans          map[string]*htmlScanState
+	finalized      map[string]struct{}
+	finalizedOrder []string
+
+	stopCh chan struct{}
+	wg     sync.WaitGroup
+}
+
+type htmlScanState struct {
+	mu        sync.Mutex
+	file      *os.File
+	tmpPath   string
+	finalPath string
+	rowCount  int
+	closed    bool
+	lastWrite time.Time
 }
 
 // SetMaskSecrets toggles secret-masking in rendered cards. Off by
@@ -54,136 +98,326 @@ func NewHTMLConfig(rootDir string, cfg BatchConfig) (*HTML, error) {
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
-	cfg.SinkLabel = "html_file"
-	h := &HTML{rootDir: rootDir}
-	h.acc = NewBatchedAccumulator(cfg, h.flush)
+	metrics.Init()
+	idleTimeout := cfg.FlushInterval
+	if idleTimeout > 0 && idleTimeout < htmlMinIdleTimeout {
+		idleTimeout = htmlMinIdleTimeout
+	}
+	h := &HTML{
+		rootDir:     rootDir,
+		maxPerScan:  cfg.MaxPerScan,
+		idleTimeout: idleTimeout,
+		scans:       make(map[string]*htmlScanState),
+		finalized:   make(map[string]struct{}, htmlFinalizedCap),
+		stopCh:      make(chan struct{}),
+	}
+	if h.idleTimeout > 0 {
+		h.wg.Add(1)
+		go h.runIdleSweeper()
+	}
 	return h, nil
 }
 
-func (h *HTML) Name() string { return "html_file" }
+func (h *HTML) Name() string { return htmlSinkLabel }
+
+func (h *HTML) SetReplicaID(id string) { h.replicaID = id }
 
 func (h *HTML) Write(ctx context.Context, f *v1.Finding) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if f == nil {
 		return fmt.Errorf("sink: nil Finding")
 	}
 	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
 		return fmt.Errorf("sink: %w", err)
 	}
-	return h.acc.Add(ctx, f)
+
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return ErrSinkClosed
+	}
+	if _, done := h.finalized[f.ScanId]; done {
+		h.mu.Unlock()
+		metrics.SinkPostFinalizeDropped.WithLabelValues(htmlSinkLabel).Inc()
+		return nil
+	}
+	st, ok := h.scans[f.ScanId]
+	if !ok {
+		var err error
+		st, err = h.newScanState(f.ScanId)
+		if err != nil {
+			h.mu.Unlock()
+			return err
+		}
+		h.scans[f.ScanId] = st
+	}
+	h.mu.Unlock()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed {
+		return ErrSinkClosed
+	}
+	if st.rowCount >= h.maxPerScan {
+		return fmt.Errorf("sink: scan %s exceeded max %d findings", f.ScanId, h.maxPerScan)
+	}
+	row := h.buildRow(f, st.rowCount)
+	if _, err := st.file.Write([]byte(row)); err != nil {
+		return fmt.Errorf("sink: html row: %w", err)
+	}
+	st.rowCount++
+	st.lastWrite = time.Now()
+	metrics.SinkPendingFindings.WithLabelValues(htmlSinkLabel).Inc()
+	return nil
 }
 
-func (h *HTML) Close() error { return h.acc.Close() }
-
-func (h *HTML) Flush() error { return h.acc.Flush() }
-
-// Finalize drains the pending buffer for scanID and drops state.
 func (h *HTML) Finalize(_ context.Context, scanID string) error {
-	return h.acc.Finalize(scanID)
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return ErrSinkClosed
+	}
+	st, ok := h.scans[scanID]
+	if !ok {
+		h.mu.Unlock()
+		return nil
+	}
+	delete(h.scans, scanID)
+	h.markFinalizedLocked(scanID)
+	h.mu.Unlock()
+	return st.closeAndRename("terminal")
 }
 
-// SetReplicaID stamps replica_id into the per-scan filename. See
-// BatchedAccumulator.SetReplicaID.
-func (h *HTML) SetReplicaID(id string) { h.acc.SetReplicaID(id) }
+func (h *HTML) markFinalizedLocked(scanID string) {
+	if _, exists := h.finalized[scanID]; exists {
+		return
+	}
+	h.finalized[scanID] = struct{}{}
+	h.finalizedOrder = append(h.finalizedOrder, scanID)
+	for len(h.finalizedOrder) > htmlFinalizedCap {
+		evict := h.finalizedOrder[0]
+		h.finalizedOrder = h.finalizedOrder[1:]
+		delete(h.finalized, evict)
+	}
+}
 
-func (h *HTML) flush(scanID string, findings []*v1.Finding) error {
-	path := filepath.Join(h.rootDir, scanID+h.acc.ReplicaSuffix()+".html")
+func (h *HTML) Close() error {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil
+	}
+	h.closed = true
+	states := make([]*htmlScanState, 0, len(h.scans))
+	for _, st := range h.scans {
+		states = append(states, st)
+	}
+	h.scans = nil
+	h.mu.Unlock()
+
+	close(h.stopCh)
+	h.wg.Wait()
+
+	var firstErr error
+	for _, st := range states {
+		if err := st.closeAndRename("close"); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (h *HTML) Flush() error { return nil }
+
+func (h *HTML) runIdleSweeper() {
+	defer h.wg.Done()
+	tickEvery := h.idleTimeout / 2
+	if tickEvery < time.Second {
+		tickEvery = time.Second
+	}
+	t := time.NewTicker(tickEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-h.stopCh:
+			return
+		case <-t.C:
+			h.finalizeIdleLocked()
+		}
+	}
+}
+
+func (h *HTML) finalizeIdleLocked() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	var toFinalize []*htmlScanState
+	for id, st := range h.scans {
+		st.mu.Lock()
+		idle := !st.lastWrite.IsZero() && now.Sub(st.lastWrite) >= h.idleTimeout
+		st.mu.Unlock()
+		if idle {
+			toFinalize = append(toFinalize, st)
+			delete(h.scans, id)
+			h.markFinalizedLocked(id)
+		}
+	}
+	h.mu.Unlock()
+
+	for _, st := range toFinalize {
+		_ = st.closeAndRename("idle")
+	}
+}
+
+func (h *HTML) newScanState(scanID string) (*htmlScanState, error) {
+	finalName := scanID + ".html"
+	if h.replicaID != "" {
+		finalName = scanID + "." + h.replicaID + ".html"
+	}
+	finalPath := filepath.Join(h.rootDir, finalName)
 	rootClean := filepath.Clean(h.rootDir)
-	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
-		return fmt.Errorf("sink: path %q escapes rootDir %q", path, h.rootDir)
+	if !strings.HasPrefix(filepath.Clean(finalPath), rootClean+string(filepath.Separator)) {
+		return nil, fmt.Errorf("sink: path %q escapes rootDir %q", finalPath, h.rootDir)
 	}
-	type ctxLine struct {
-		LineNo  int32
-		Content string
-		Matched bool
-	}
-	type row struct {
-		Severity string
-		RuleID   string
-		Path     string
-		Line     int32
-		Secret   string
-		Context  []ctxLine // empty when scan didn't request --context > 0
-	}
-	rows := make([]row, 0, len(findings))
-	counts := map[string]int{}
-	for _, f := range findings {
-		p := f.FilePath
-		if p == "" && len(f.Refs) > 0 {
-			p = f.Refs[0].Path
-		}
-		var ctx []ctxLine
-		if len(f.ContextBefore) > 0 || len(f.ContextAfter) > 0 {
-			ctx = make([]ctxLine, 0, len(f.ContextBefore)+1+len(f.ContextAfter))
-			startLine := f.LineNumber - int32(len(f.ContextBefore))
-			if startLine < 1 {
-				startLine = 1
-			}
-			ln := startLine
-			for _, b := range f.ContextBefore {
-				ctx = append(ctx, ctxLine{LineNo: ln, Content: string(b)})
-				ln++
-			}
-			ctx = append(ctx, ctxLine{LineNo: f.LineNumber, Content: string(f.MatchedLine), Matched: true})
-			ln = f.LineNumberEnd + 1
-			if ln <= 0 {
-				ln = f.LineNumber + 1
-			}
-			for _, a := range f.ContextAfter {
-				ctx = append(ctx, ctxLine{LineNo: ln, Content: string(a)})
-				ln++
-			}
-		}
-		secret := string(f.MatchedSecret)
-		if h.maskSecret {
-			secret = maskSecret(secret)
-		}
-		rows = append(rows, row{
-			Severity: f.Severity.String(),
-			RuleID:   f.RuleId,
-			Path:     p,
-			Line:     f.LineNumber,
-			Secret:   secret,
-			Context:  ctx,
-		})
-		counts[f.Severity.String()]++
-	}
-	data := struct {
-		ScanID   string
-		Findings []row
-		Counts   map[string]int
-	}{ScanID: scanID, Findings: rows, Counts: counts}
-
-	tmp, err := os.CreateTemp(h.rootDir, scanID+".html.tmp-*")
+	var nonce [8]byte
+	_, _ = rand.Read(nonce[:])
+	tmpPath := filepath.Join(h.rootDir, fmt.Sprintf(".%s.%s.html", scanID, hex.EncodeToString(nonce[:])))
+	file, err := os.Create(tmpPath)
 	if err != nil {
-		return fmt.Errorf("sink: tempfile: %w", err)
+		return nil, fmt.Errorf("sink: html tempfile: %w", err)
 	}
-	tmpName := tmp.Name()
+	var prefix bytes.Buffer
+	if err := htmlPrefixTemplate.Execute(&prefix, struct{ ScanID string }{ScanID: scanID}); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("sink: html prefix: %w", err)
+	}
+	if _, err := file.Write(prefix.Bytes()); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("sink: html prefix write: %w", err)
+	}
+	return &htmlScanState{
+		file:      file,
+		tmpPath:   tmpPath,
+		finalPath: finalPath,
+	}, nil
+}
+
+type htmlCtxLine struct {
+	LineNo  int32
+	Content string
+	Matched bool
+}
+
+type htmlRow struct {
+	Index    int
+	Severity string
+	RuleID   string
+	Path     string
+	Line     int32
+	Secret   string
+	Context  []htmlCtxLine
+}
+
+// buildRow renders one `<tr>` (plus an optional context row) for f.
+// Uses html/template to escape the dynamic fields.
+func (h *HTML) buildRow(f *v1.Finding, index int) string {
+	p := f.FilePath
+	if p == "" && len(f.Refs) > 0 {
+		p = f.Refs[0].Path
+	}
+	var ctx []htmlCtxLine
+	if len(f.ContextBefore) > 0 || len(f.ContextAfter) > 0 {
+		ctx = make([]htmlCtxLine, 0, len(f.ContextBefore)+1+len(f.ContextAfter))
+		startLine := f.LineNumber - int32(len(f.ContextBefore))
+		if startLine < 1 {
+			startLine = 1
+		}
+		ln := startLine
+		for _, b := range f.ContextBefore {
+			ctx = append(ctx, htmlCtxLine{LineNo: ln, Content: string(b)})
+			ln++
+		}
+		ctx = append(ctx, htmlCtxLine{LineNo: f.LineNumber, Content: string(f.MatchedLine), Matched: true})
+		ln = f.LineNumberEnd + 1
+		if ln <= 0 {
+			ln = f.LineNumber + 1
+		}
+		for _, a := range f.ContextAfter {
+			ctx = append(ctx, htmlCtxLine{LineNo: ln, Content: string(a)})
+			ln++
+		}
+	}
+	secret := string(f.MatchedSecret)
+	if h.maskSecret {
+		secret = maskSecret(secret)
+	}
+	r := htmlRow{
+		Index:    index,
+		Severity: f.Severity.String(),
+		RuleID:   f.RuleId,
+		Path:     p,
+		Line:     f.LineNumber,
+		Secret:   secret,
+		Context:  ctx,
+	}
+	var buf bytes.Buffer
+	if err := htmlRowTemplate.Execute(&buf, r); err != nil {
+		// Template execution failures shouldn't happen in practice; if
+		// they do, emit a visible "render error" cell rather than
+		// silently dropping the row.
+		return fmt.Sprintf("<tr><td colspan=5>html render error: %v</td></tr>\n", err)
+	}
+	return buf.String()
+}
+
+func (st *htmlScanState) closeAndRename(trigger string) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed {
+		return nil
+	}
+	st.closed = true
+	rowCount := st.rowCount
+	defer func() {
+		if rowCount > 0 {
+			metrics.SinkPendingFindings.WithLabelValues(htmlSinkLabel).Sub(float64(rowCount))
+		}
+		metrics.SinkFlushTotal.WithLabelValues(htmlSinkLabel, trigger).Inc()
+	}()
 	cleanup := func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		_ = st.file.Close()
+		_ = os.Remove(st.tmpPath)
 	}
-	if err := htmlTemplate.Execute(tmp, data); err != nil {
+	if _, err := st.file.Write([]byte(htmlSuffix)); err != nil {
 		cleanup()
-		return fmt.Errorf("sink: render html: %w", err)
+		return fmt.Errorf("sink: html suffix: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := st.file.Sync(); err != nil {
 		cleanup()
-		return fmt.Errorf("sink: sync tempfile: %w", err)
+		return fmt.Errorf("sink: html sync: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("sink: close tempfile: %w", err)
+	if err := st.file.Close(); err != nil {
+		_ = os.Remove(st.tmpPath)
+		return fmt.Errorf("sink: html close: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("sink: rename to %s: %w", path, err)
+	if err := os.Rename(st.tmpPath, st.finalPath); err != nil {
+		_ = os.Remove(st.tmpPath)
+		return fmt.Errorf("sink: html rename to %s: %w", st.finalPath, err)
 	}
 	return nil
 }
 
-// htmlTemplate is the report skeleton. Inline CSS + JS so the file is
-// fully self-contained — drop on a USB stick, open offline.
-var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
+// htmlPrefixTemplate is the static head + style + filter input + table
+// opener. The closing JS computes severity counts from the rendered
+// tbody on page load, so the prefix doesn't need to know totals.
+var htmlPrefixTemplate = template.Must(template.New("htmlPrefix").Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -217,10 +451,8 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
 </head>
 <body>
 <h1>Harporis findings — <code>{{.ScanID}}</code></h1>
-<div class="meta">{{len .Findings}} finding(s) total</div>
-<div class="counts">
-{{range $sev, $n := .Counts}}<span class="badge {{$sev}}">{{$sev}}: {{$n}}</span>{{end}}
-</div>
+<div class="meta"><span id="totalCount">0</span> finding(s) total</div>
+<div class="counts" id="counts"></div>
 <input type="search" id="q" placeholder="Filter by rule, path, secret…">
 <table id="t">
 <thead><tr>
@@ -231,27 +463,58 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
   <th>Secret</th>
 </tr></thead>
 <tbody>
-{{range $i, $f := .Findings}}<tr>
+`))
+
+// htmlRowTemplate is one `<tr>` (and an optional adjacent context row).
+var htmlRowTemplate = template.Must(template.New("htmlRow").Parse(`<tr data-sev="{{.Severity}}">
   <td><span class="badge {{.Severity}}">{{.Severity}}</span></td>
   <td><code>{{.RuleID}}</code></td>
   <td><code>{{.Path}}</code></td>
   <td>{{.Line}}</td>
-  <td class="secret"><code>{{.Secret}}</code>{{if .Context}} <button class="ctx-toggle" data-target="ctx-{{$i}}">show context</button>{{end}}</td>
+  <td class="secret"><code>{{.Secret}}</code>{{if .Context}} <button class="ctx-toggle" data-target="ctx-{{.Index}}">show context</button>{{end}}</td>
 </tr>
-{{if .Context}}<tr class="ctx-row" id="ctx-{{$i}}" style="display:none"><td colspan="5"><pre>{{range .Context}}<span{{if .Matched}} class="match"{{end}}><span class="ln">{{.LineNo}}</span>{{.Content}}
+{{- if .Context}}
+<tr class="ctx-row" id="ctx-{{.Index}}" style="display:none"><td colspan="5"><pre>{{range .Context}}<span{{if .Matched}} class="match"{{end}}><span class="ln">{{.LineNo}}</span>{{.Content}}
 </span>{{end}}</pre></td></tr>
-{{end}}{{end}}</tbody>
+{{- end}}
+`))
+
+// htmlSuffix closes the table, embeds the sort/filter/counts script,
+// then closes body+html. Built from string concatenation rather than
+// template.Execute — there are no dynamic fields here.
+const htmlSuffix = `</tbody>
 </table>
 <script>
-  // Sort by column on header click.
   const sevOrder = {CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, SEVERITY_UNSPECIFIED: 4};
+
+  // Severity counts: walk rendered finding rows and group by data-sev.
+  // Done at load time so the streaming sink doesn't have to know totals.
+  (function renderCounts() {
+    const counts = {};
+    document.querySelectorAll("#t tbody tr[data-sev]").forEach(r => {
+      const k = r.dataset.sev;
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const target = document.getElementById("counts");
+    Object.keys(counts).sort((a, b) => (sevOrder[a] ?? 99) - (sevOrder[b] ?? 99)).forEach(k => {
+      const s = document.createElement("span");
+      s.className = "badge " + k;
+      s.textContent = k + ": " + counts[k];
+      target.appendChild(s);
+    });
+    document.getElementById("totalCount").textContent =
+      Object.values(counts).reduce((a, b) => a + b, 0);
+  })();
+
   document.querySelectorAll("th[data-key]").forEach((th, i) => {
     th.addEventListener("click", () => {
       const tbody = document.querySelector("#t tbody");
-      const rows = Array.from(tbody.querySelectorAll("tr"));
+      const findingRows = Array.from(tbody.querySelectorAll("tr[data-sev]"));
       const dir = th.dataset.dir === "asc" ? -1 : 1;
       th.dataset.dir = dir === 1 ? "asc" : "desc";
-      rows.sort((a, b) => {
+      // Sort finding rows, then re-append each (with its trailing
+      // context row if present) to preserve pairing.
+      findingRows.sort((a, b) => {
         const av = a.cells[i].innerText.trim();
         const bv = b.cells[i].innerText.trim();
         if (th.dataset.key === "sev") {
@@ -262,11 +525,16 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
         }
         return dir * av.localeCompare(bv);
       });
-      rows.forEach(r => tbody.appendChild(r));
+      findingRows.forEach(r => {
+        tbody.appendChild(r);
+        const nextSib = r.nextElementSibling;
+        if (nextSib && nextSib.classList.contains("ctx-row")) {
+          tbody.appendChild(nextSib);
+        }
+      });
     });
   });
-  // Live filter (skip the context-only rows; their visibility is tied
-  // to the parent finding row via the data-target toggle).
+
   document.getElementById("q").addEventListener("input", e => {
     const q = e.target.value.toLowerCase();
     document.querySelectorAll("#t tbody tr").forEach(row => {
@@ -274,7 +542,7 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
       row.style.display = row.innerText.toLowerCase().includes(q) ? "" : "none";
     });
   });
-  // Toggle context rows.
+
   document.querySelectorAll(".ctx-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
       const tr = document.getElementById(btn.dataset.target);
@@ -287,4 +555,4 @@ var htmlTemplate = template.Must(template.New("report").Parse(`<!DOCTYPE html>
 </script>
 </body>
 </html>
-`))
+`

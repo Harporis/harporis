@@ -28,6 +28,10 @@ func TestXLSX_ReportPerScanRoundtrips(t *testing.T) {
 			t.Fatalf("Write %s: %v", f.FindingId, err)
 		}
 	}
+	// Streaming sink: file is only valid after Finalize.
+	if err := x.Finalize(ctx, "x1"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
 	path := filepath.Join(dir, "x1.xlsx")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("xlsx not created: %v", err)
