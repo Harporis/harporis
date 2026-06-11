@@ -80,6 +80,32 @@ Re-run the installer any time — every step is idempotent.
 | `harporis scan -f <list>` | empty = every enabled sink fires | Per-scan format selection. Accepted: `ndjson`, `sarif`, `html`, `xlsx`, `pdf`, `parquet`. |
 | `harporis findings show -f <fmt>` | `ndjson` | Read-side formats: `ndjson`, `pretty`, `sarif`, `json`, `csv`, `md`, `html`, `xlsx`, `pdf`, `parquet`. |
 
+## Scaling
+
+The pipeline is queue-based end-to-end; each service can be scaled
+independently without code changes.
+
+| Service | Scale via | Notes |
+|---|---|---|
+| `getter` | `docker compose up -d --scale getter=N` | JetStream queue group `getter-pool` round-robins `ScanRequest`s across replicas. |
+| `scanner` | `docker compose up -d --scale scanner=N` | Durable pull consumer `scanner-pool` on `HARPORIS_CHUNKS`; one chunk → one scanner replica. |
+| `writer` | `scripts/sharded-compose.sh up N` | Per-scan affinity (FNV-1a hash on `scan_id`); each writer owns one shard. Filename stays `<scan>.<ext>` without a replica suffix. |
+
+The first two work because JetStream's `WorkQueuePolicy` plus a shared
+durable name gives free fair-share dispatch — `docker compose --scale`
+is enough. Writer needs deterministic routing (otherwise two replicas
+race to rename onto the same `<scan>.<ext>` path), so the script
+generates N explicit services with `HARPORIS_REPLICA_INDEX` baked in.
+
+Confirm cleanup + distribution at any time with:
+
+```
+harporis nats stats
+```
+
+(WorkQueuePolicy streams hold `messages=0` in steady state; STATUS
+grows up to its rolling 7d/512MiB window.)
+
 ## Hands-on docs
 
 - CLI tour + install options: [`services/cli/README.md`](services/cli/README.md)
