@@ -30,6 +30,16 @@ type ConsumerOptions struct {
 	AckWaitSeconds int
 	MaxDeliver     int
 	MaxAckPending  int
+
+	// ShardIndex / ShardCount control per-scan writer affinity. When
+	// ShardCount<=1, the consumer binds the legacy `writer-pool` durable
+	// to `harporis.findings.>` — every replica sees every Finding. When
+	// ShardCount>1, the consumer binds `writer-pool-s<idx>` to
+	// `harporis.findings.s<idx>.>` so each Finding for a given scan
+	// lands on exactly one replica. The publisher hashes scan_id the
+	// same way (see wire.FindingsSubject).
+	ShardIndex int
+	ShardCount int
 }
 
 // FindingsConsumer subscribes to harporis.findings.> via a durable pull
@@ -45,12 +55,15 @@ type FindingsConsumer struct {
 // pending findings don't block the WorkQueuePolicy stream forever.
 const DefaultInactiveThreshold = 24 * time.Hour
 
-// NewFindingsConsumer creates the durable pull subscription.
+// NewFindingsConsumer creates the durable pull subscription. ShardIndex
+// / ShardCount in opts select per-scan affinity; zero/one disables it.
 func NewFindingsConsumer(js natsclient.JetStreamContext, opts ConsumerOptions) (*FindingsConsumer, error) {
 	ackWait := time.Duration(opts.AckWaitSeconds) * time.Second
+	filterSubject := wire.FindingsShardFilterSubject(opts.ShardIndex, opts.ShardCount)
+	durable := wire.WriterDurableForShard(opts.ShardIndex, opts.ShardCount)
 	sub, err := js.PullSubscribe(
-		wire.FindingsWildcardSubject,
-		wire.WriterDurableConsumer,
+		filterSubject,
+		durable,
 		natsclient.BindStream(wire.FindingsStream),
 		natsclient.ManualAck(),
 		natsclient.AckWait(ackWait),

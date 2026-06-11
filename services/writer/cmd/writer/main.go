@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -58,13 +59,47 @@ func main() {
 		FlushBatch:    cfg.FlushBatch,
 		FlushInterval: time.Duration(cfg.FlushIntervalMs) * time.Millisecond,
 	}
-	// HOSTNAME is set by docker compose / k8s to a per-replica id.
-	// Stamping it into each sink's per-scan filename avoids the
-	// "two replicas race to rename onto the same path" bug in
-	// multi-replica deployments (NDJSON uses O_APPEND so it's safe).
-	// Empty keeps the legacy single-file shape for single-replica
-	// (the default) deployments.
-	replicaID := os.Getenv("HOSTNAME")
+	// Per-scan affinity vs. per-replica suffix selection.
+	//
+	// With HARPORIS_FINDINGS_SHARDS<=1 (legacy): every replica may write
+	// any scan, so HOSTNAME is stamped into per-scan filenames to keep
+	// replicas from racing to rename onto the same path. NDJSON uses
+	// O_APPEND so it stays plain `<scan>.ndjson`.
+	//
+	// With HARPORIS_FINDINGS_SHARDS>1 + REPLICA_INDEX set: this replica
+	// owns exactly one shard via the durable subscription filter, so
+	// every scan lands on a single replica — no clobbering possible,
+	// filenames stay plain `<scan>.<ext>`.
+	shardCount := wire.FindingsShardCount()
+	shardIndex := 0
+	if v := os.Getenv("HARPORIS_REPLICA_INDEX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n < shardCount {
+			shardIndex = n
+		} else {
+			fatal("HARPORIS_REPLICA_INDEX=%q invalid (need 0..%d)", v, shardCount-1)
+		}
+	} else if shardCount > 1 {
+		// docker compose --scale writer=N can't easily inject distinct
+		// envs per container, but DOES name containers
+		// `<project>-writer-<n>` (1-indexed). Fall back to parsing
+		// HOSTNAME so `docker compose up -d --scale writer=N` works
+		// out-of-the-box when HARPORIS_FINDINGS_SHARDS=N is also set.
+		if idx, ok := parseReplicaIndexFromHostname(os.Getenv("HOSTNAME"), shardCount); ok {
+			shardIndex = idx
+		} else {
+			fatal("HARPORIS_FINDINGS_SHARDS=%d but HARPORIS_REPLICA_INDEX is unset and HOSTNAME=%q does not match `<name>-N` pattern",
+				shardCount, os.Getenv("HOSTNAME"))
+		}
+	}
+	replicaID := ""
+	if shardCount <= 1 {
+		replicaID = os.Getenv("HOSTNAME")
+	}
+	slog.Info("findings affinity",
+		"shards", shardCount,
+		"replica_index", shardIndex,
+		"filename_replica_suffix", replicaID,
+	)
 
 	sinks := make([]sink.Sink, 0, 6)
 	if cfg.NDJSONEnabled != nil && *cfg.NDJSONEnabled {
@@ -190,6 +225,8 @@ func main() {
 		AckWaitSeconds: cfg.AckWaitSeconds,
 		MaxDeliver:     cfg.MaxDeliver,
 		MaxAckPending:  cfg.MaxAckPending,
+		ShardIndex:     shardIndex,
+		ShardCount:     shardCount,
 	})
 	if err != nil {
 		fatal("create consumer: %v", err)
@@ -324,6 +361,32 @@ func main() {
 		slog.Warn("nats drain", "err", err)
 	}
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+// parseReplicaIndexFromHostname extracts a 0-based shard index from a
+// compose-style hostname of shape `<anything>-<N>` where N is 1-based.
+// Returns (idx, true) on success; (0, false) otherwise. shardCount is
+// used to validate the parsed index falls inside [0, shardCount).
+func parseReplicaIndexFromHostname(hostname string, shardCount int) (int, bool) {
+	if hostname == "" {
+		return 0, false
+	}
+	i := len(hostname)
+	for i > 0 && hostname[i-1] >= '0' && hostname[i-1] <= '9' {
+		i--
+	}
+	if i == len(hostname) || i == 0 || hostname[i-1] != '-' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(hostname[i:])
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	idx := n - 1
+	if idx < 0 || idx >= shardCount {
+		return 0, false
+	}
+	return idx, true
 }
 
 // runRetentionLoop sweeps the findings dir on a ticker until ctx is

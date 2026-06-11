@@ -115,6 +115,11 @@ services:
       NATS_URL: nats://nats:4222
       NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
       LOG_LEVEL: info
+      # Findings affinity: when set >1, scanner publishes
+      # harporis.findings.s<hash%N>.<scan_id>. Default 1 keeps legacy
+      # subject. Writer side reads the same env to decide which shard
+      # filter to bind its durable consumer to.
+      HARPORIS_FINDINGS_SHARDS: "${HARPORIS_FINDINGS_SHARDS:-1}"
       # External rules path the scanner watches for hot-reload. Operators
       # edit ./services/scanner/rules/default.yaml on the host; the
       # scanner picks up the change within ~5s without restart and
@@ -153,6 +158,15 @@ services:
       NATS_URL: nats://nats:4222
       NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
       LOG_LEVEL: info
+      # Per-scan affinity. Set HARPORIS_FINDINGS_SHARDS=N (matching
+      # writer replica count) to make scanner+writer agree on which
+      # replica owns which scan. Default 1 = legacy single-pool
+      # behaviour, files retain HOSTNAME suffix.
+      #
+      # HARPORIS_REPLICA_INDEX is only needed if HOSTNAME doesn't end
+      # in `-<N>` (compose containers do, so leaving this unset works
+      # with `docker compose up -d --scale writer=N`).
+      HARPORIS_FINDINGS_SHARDS: "${HARPORIS_FINDINGS_SHARDS:-1}"
     expose:
       - "9102"
     volumes:

@@ -88,9 +88,79 @@ func Services() []string {
 }
 
 // Per-scan subject builders.
-func ChunksSubject(scanID string) string   { return "harporis.chunks." + scanID }
-func StatusSubject(scanID string) string   { return "harporis.status." + scanID }
-func FindingsSubject(scanID string) string { return "harporis.findings." + scanID }
+func ChunksSubject(scanID string) string { return "harporis.chunks." + scanID }
+func StatusSubject(scanID string) string { return "harporis.status." + scanID }
+
+// FindingsSubject returns the JetStream subject a Finding for scanID
+// should be published to. When sharding is enabled (HARPORIS_FINDINGS_SHARDS>1),
+// the subject carries a deterministic shard segment so all findings for
+// a given scan land on the same writer replica:
+//
+//	1 shard  (default): harporis.findings.<scan_id>
+//	N shards (N>1):    harporis.findings.s<hash%N>.<scan_id>
+//
+// The default keeps backward compatibility with existing deployments
+// (no consumer-name change, no migration needed); operators opt into
+// affinity by setting HARPORIS_FINDINGS_SHARDS to match REPLICA_COUNT.
+func FindingsSubject(scanID string) string {
+	n := FindingsShardCount()
+	if n <= 1 {
+		return "harporis.findings." + scanID
+	}
+	return findingsShardPrefix(shardForScanID(scanID, n)) + "." + scanID
+}
+
+// FindingsShardFilterSubject returns the wildcard subject filter a
+// writer replica binds its durable consumer to. Same shape as the
+// publish-side subject:
+//
+//	1 shard:           harporis.findings.>   (the legacy wildcard)
+//	N shards, idx=k:   harporis.findings.s<k>.>
+func FindingsShardFilterSubject(shardIdx, shardCount int) string {
+	if shardCount <= 1 {
+		return FindingsWildcardSubject
+	}
+	return findingsShardPrefix(shardIdx) + ".>"
+}
+
+// WriterDurableForShard returns the durable consumer name a writer
+// replica binds to. One durable per shard so JetStream tracks pending
+// findings per-shard rather than across the pool.
+//
+//	1 shard:  writer-pool (legacy name)
+//	N shards: writer-pool-s<k>
+func WriterDurableForShard(shardIdx, shardCount int) string {
+	if shardCount <= 1 {
+		return WriterDurableConsumer
+	}
+	return WriterDurableConsumer + "-s" + strconv.Itoa(shardIdx)
+}
+
+func findingsShardPrefix(shardIdx int) string {
+	return "harporis.findings.s" + strconv.Itoa(shardIdx)
+}
+
+// shardForScanID returns hash(scanID) % shardCount using FNV-1a (32-bit,
+// stdlib, no deps). Hash is deterministic across replicas/restarts so
+// publisher and consumer agree on which shard a scan belongs to.
+func shardForScanID(scanID string, shardCount int) int {
+	if shardCount <= 1 {
+		return 0
+	}
+	var h uint32 = 2166136261
+	for i := 0; i < len(scanID); i++ {
+		h ^= uint32(scanID[i])
+		h *= 16777619
+	}
+	return int(h % uint32(shardCount))
+}
+
+// ShardForScanID is the exported form of the shard lookup used by tests
+// and writer-side filename code that wants to confirm a scan landed on
+// the expected replica.
+func ShardForScanID(scanID string, shardCount int) int {
+	return shardForScanID(scanID, shardCount)
+}
 
 // DialConfig is a service-agnostic NATS connection config. All TLS/auth
 // fields are optional; zero values preserve the dev-stack default
@@ -193,7 +263,26 @@ const (
 	EnvStatusRetentionAge      = "HARPORIS_STATUS_RETENTION_AGE"
 	EnvStatusRetentionMaxBytes = "HARPORIS_STATUS_RETENTION_MAX_BYTES"
 	EnvWorkQueueMaxBytes       = "HARPORIS_WORKQUEUE_MAX_BYTES"
+
+	// EnvFindingsShards opts the deployment into per-scan writer affinity.
+	// Default (unset or 1) preserves legacy single-pool behaviour. When
+	// >1, publisher hashes scan_id into one of N shards and each writer
+	// replica binds a durable to exactly one shard — every Finding for
+	// the same scan lands on the same replica, eliminating the
+	// <scan>.<replica>.<ext> filename suffix.
+	EnvFindingsShards = "HARPORIS_FINDINGS_SHARDS"
 )
+
+// FindingsShardCount returns the configured number of writer shards.
+// Default 1 = legacy single-pool topology.
+func FindingsShardCount() int {
+	if v := os.Getenv(EnvFindingsShards); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1
+}
 
 func statusMaxAge() time.Duration {
 	if v := os.Getenv(EnvStatusRetentionAge); v != "" {

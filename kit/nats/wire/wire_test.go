@@ -3,6 +3,7 @@ package wire_test
 import (
 	"context"
 	"crypto/tls"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -201,6 +202,74 @@ func TestEnsureStreams_MigratesStatusStreamLimits(t *testing.T) {
 	}
 	if info.Config.MaxBytes != wire.StatusMaxBytes {
 		t.Errorf("after migrate, MaxBytes = %d, want %d", info.Config.MaxBytes, wire.StatusMaxBytes)
+	}
+}
+
+func TestFindingsSubject_DefaultIsLegacy(t *testing.T) {
+	// Unset the env var explicitly; the wire pkg default must be 1 shard.
+	t.Setenv(wire.EnvFindingsShards, "")
+	if got := wire.FindingsSubject("scan-abc"); got != "harporis.findings.scan-abc" {
+		t.Errorf("FindingsSubject = %q, want legacy 'harporis.findings.scan-abc'", got)
+	}
+	if got := wire.FindingsShardCount(); got != 1 {
+		t.Errorf("FindingsShardCount = %d, want 1", got)
+	}
+	if got := wire.FindingsShardFilterSubject(0, 1); got != "harporis.findings.>" {
+		t.Errorf("filter subject = %q, want legacy wildcard", got)
+	}
+	if got := wire.WriterDurableForShard(0, 1); got != wire.WriterDurableConsumer {
+		t.Errorf("durable = %q, want legacy %q", got, wire.WriterDurableConsumer)
+	}
+}
+
+func TestFindingsSubject_ShardedSubjects(t *testing.T) {
+	t.Setenv(wire.EnvFindingsShards, "4")
+	if got := wire.FindingsShardCount(); got != 4 {
+		t.Fatalf("FindingsShardCount = %d, want 4", got)
+	}
+	got := wire.FindingsSubject("scan-abc")
+	want := "harporis.findings.s" + strconv.Itoa(wire.ShardForScanID("scan-abc", 4)) + ".scan-abc"
+	if got != want {
+		t.Errorf("FindingsSubject = %q, want %q", got, want)
+	}
+	// Filter subjects per shard.
+	for i := 0; i < 4; i++ {
+		if got := wire.FindingsShardFilterSubject(i, 4); got != "harporis.findings.s"+strconv.Itoa(i)+".>" {
+			t.Errorf("filter subject for shard %d = %q", i, got)
+		}
+		if got := wire.WriterDurableForShard(i, 4); got != "writer-pool-s"+strconv.Itoa(i) {
+			t.Errorf("durable for shard %d = %q", i, got)
+		}
+	}
+}
+
+func TestShardForScanID_StableAcrossCalls(t *testing.T) {
+	for _, scanID := range []string{"a", "scan-1", "00000000-0000-0000-0000-000000000000", "long-scan-id-with-dashes"} {
+		first := wire.ShardForScanID(scanID, 8)
+		for i := 0; i < 100; i++ {
+			if wire.ShardForScanID(scanID, 8) != first {
+				t.Fatalf("ShardForScanID not stable for %q", scanID)
+			}
+		}
+		if first < 0 || first >= 8 {
+			t.Errorf("shard %d out of range for %q", first, scanID)
+		}
+	}
+}
+
+func TestShardForScanID_RoughlyEvenDistribution(t *testing.T) {
+	const N = 4
+	const samples = 10000
+	counts := make([]int, N)
+	for i := 0; i < samples; i++ {
+		counts[wire.ShardForScanID("scan-"+strconv.Itoa(i), N)]++
+	}
+	for i, c := range counts {
+		// 25% expected ± 25% slack — FNV-1a on monotonic IDs isn't
+		// perfectly uniform but should be well within these bounds.
+		if c < samples/N*3/4 || c > samples/N*5/4 {
+			t.Errorf("shard %d got %d of %d (%.1f%%), expected ~25%%", i, c, samples, float64(c)/samples*100)
+		}
 	}
 }
 

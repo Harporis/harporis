@@ -1,0 +1,53 @@
+# Sharded writer topology overlay.
+#
+# Stacks on top of docker-compose.yml to demonstrate per-scan writer
+# affinity. The base compose runs a single writer; this overlay
+# replaces it with N=2 explicit replicas (writer-0, writer-1), each
+# bound to its own shard via HARPORIS_REPLICA_INDEX and the shared
+# HARPORIS_FINDINGS_SHARDS=2.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.sharded.yml up -d --build
+#
+# Each scan_id hashes (FNV-1a % 2) to exactly one shard, so every
+# Finding for that scan lands on the same replica and writes to plain
+# `<scan>.<ext>` (no HOSTNAME suffix). Compare with the legacy
+# topology where two replicas would clobber/suffix.
+#
+# To scale to N>2: clone the writer-K block, bump REPLICA_INDEX, and
+# set HARPORIS_FINDINGS_SHARDS=N on scanner + every writer.
+
+services:
+  scanner:
+    environment:
+      HARPORIS_FINDINGS_SHARDS: "2"
+
+  writer:
+    # Disable the base writer in favour of the two explicit replicas
+    # below. `replicas: 0` cleanly removes it from `docker compose up`.
+    deploy:
+      replicas: 0
+
+  writer-0:
+    extends:
+      file: docker-compose.yml
+      service: writer
+    container_name: harporis-writer-0
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
+      LOG_LEVEL: info
+      HARPORIS_FINDINGS_SHARDS: "2"
+      HARPORIS_REPLICA_INDEX: "0"
+
+  writer-1:
+    extends:
+      file: docker-compose.yml
+      service: writer
+    container_name: harporis-writer-1
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
+      LOG_LEVEL: info
+      HARPORIS_FINDINGS_SHARDS: "2"
+      HARPORIS_REPLICA_INDEX: "1"
