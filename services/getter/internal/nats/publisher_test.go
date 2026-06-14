@@ -24,7 +24,7 @@ func TestPublisher_PublishesChunkAndStatus(t *testing.T) {
 	defer cl.Close()
 	require.NoError(t, wire.EnsureStreams(cl.JS))
 
-	pub := NewPublisher(cl.JS, 5)
+	pub := NewPublisher(cl.JS, 5, "getter-test")
 
 	chunkSub, err := cl.JS.PullSubscribe(wire.ChunksSubject("scan-1"), "test-cons-chunks", natsclient.BindStream(wire.ChunksStream))
 	require.NoError(t, err)
@@ -52,6 +52,15 @@ func TestPublisher_PublishesChunkAndStatus(t *testing.T) {
 	require.Equal(t, v1.ScanState_COMPLETED, st.State)
 }
 
+func TestPublishStatusStampsSource(t *testing.T) {
+	p := &Publisher{source: "getter-testhost"}
+	ev := &v1.StatusEvent{ScanId: "s1", State: v1.ScanState_RUNNING}
+	p.stampSource(ev)
+	if ev.Source != "getter-testhost" {
+		t.Fatalf("source = %q, want getter-testhost", ev.Source)
+	}
+}
+
 // Publishing the same chunk twice with the same ChunkId must result in
 // exactly one message in the stream — JetStream's per-message dedup
 // guarantees exactly-once on retry storms.
@@ -64,7 +73,7 @@ func TestPublisher_DedupsByChunkID(t *testing.T) {
 	defer cl.Close()
 	require.NoError(t, wire.EnsureStreams(cl.JS))
 
-	pub := NewPublisher(cl.JS, 5)
+	pub := NewPublisher(cl.JS, 5, "getter-test")
 	chunk := &v1.GitRowChunk{
 		ScanId:  "scan-dedup",
 		ChunkId: "fixed-chunk-id-for-dedup",

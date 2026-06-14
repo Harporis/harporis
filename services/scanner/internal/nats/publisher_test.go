@@ -12,10 +12,21 @@ import (
 	"github.com/Harporis/harporis/kit/nats/wire"
 )
 
+func TestStatusSecretsFoundCarriesSource(t *testing.T) {
+	p := &Publisher{source: "scanner-testhost"}
+	ev := p.buildSecretsFoundEvent("s1", 4)
+	if ev.Source != "scanner-testhost" {
+		t.Fatalf("source = %q, want scanner-testhost", ev.Source)
+	}
+	if ev.GetMetrics().GetSecretsFound() != 4 {
+		t.Fatalf("secrets = %d, want 4", ev.GetMetrics().GetSecretsFound())
+	}
+}
+
 func TestPublisher_FindingDedupedByMsgID(t *testing.T) {
 	s := runJSServer(t)
 	cl := dialAndEnsure(t, s)
-	p := NewPublisher(cl.JS, 5*time.Second)
+	p := NewPublisher(cl.JS, 5*time.Second, "scanner-test")
 
 	f := &v1.Finding{
 		ScanId: "scan-X", FindingId: "fid-1", ChunkId: "c-1",
@@ -58,7 +69,7 @@ func TestPublisher_FindingDedupedByMsgID(t *testing.T) {
 func TestPublisher_StatusEventCarriesSecretsFound(t *testing.T) {
 	s := runJSServer(t)
 	cl := dialAndEnsure(t, s)
-	p := NewPublisher(cl.JS, 5*time.Second)
+	p := NewPublisher(cl.JS, 5*time.Second, "scanner-test")
 
 	err := p.PublishStatusSecretsFound(context.Background(), "scan-Y", 42)
 	if err != nil {

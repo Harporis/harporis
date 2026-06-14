@@ -32,7 +32,7 @@ func TestEndToEnd_CurrentState(t *testing.T) {
 	require.NoError(t, err)
 	defer cl.Close()
 	require.NoError(t, wire.EnsureStreams(cl.JS))
-	pub := getnats.NewPublisher(cl.JS, 5)
+	pub := getnats.NewPublisher(cl.JS, 5, "getter-test")
 
 	registry := scan.NewRegistry()
 	dispatcher := func(ctx context.Context, req *v1.ScanRequest) error {
