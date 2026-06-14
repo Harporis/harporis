@@ -37,6 +37,27 @@ func (c *Client) SubscribeStatus(scanID string) (*natsclient.Subscription, func(
 	return sub, cleanup, nil
 }
 
+// SubscribeStatusAll returns a pull subscription over EVERY scan's status
+// subject (wildcard) plus a cleanup func. DeliverNew so it tails only
+// events arriving after subscription; callers seed historical state
+// separately via ListHistory. InactiveThreshold reaps the ephemeral
+// consumer server-side if the CLI is killed.
+func (c *Client) SubscribeStatusAll() (*natsclient.Subscription, func(), error) {
+	consumer := fmt.Sprintf("cli-watch-all-%d", time.Now().UnixNano())
+	sub, err := c.JS.PullSubscribe(wire.StatusWildcardSubject, consumer,
+		natsclient.BindStream(wire.StatusStream),
+		natsclient.DeliverNew(),
+		natsclient.InactiveThreshold(30*time.Second))
+	if err != nil {
+		return nil, nil, fmt.Errorf("subscribe status all: %w", err)
+	}
+	cleanup := func() {
+		_ = sub.Unsubscribe()
+		_ = c.JS.DeleteConsumer(wire.StatusStream, consumer)
+	}
+	return sub, cleanup, nil
+}
+
 // FetchStatusEvents pulls up to statusFetchBatch StatusEvents from the
 // subscription with the given per-fetch deadline. Returns a benign
 // empty slice on per-fetch timeout (the caller decides whether to keep
