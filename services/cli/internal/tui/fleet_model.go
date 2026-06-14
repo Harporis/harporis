@@ -27,19 +27,19 @@ type FleetModel struct {
 	scans      map[string]*v1.StatusEvent
 	activeOnly bool
 	natsURL    string
-	startedAt  time.Time
 	err        error
 }
 
 // NewFleetModel returns an empty dashboard.
 func NewFleetModel() FleetModel {
-	return FleetModel{scans: map[string]*v1.StatusEvent{}, startedAt: time.Now()}
+	return FleetModel{scans: map[string]*v1.StatusEvent{}}
 }
 
 // WithNATSURL sets the header URL label.
 func (m FleetModel) WithNATSURL(u string) FleetModel { m.natsURL = u; return m }
 
-// Scans exposes the folded state for tests.
+// Scans exposes a read-only view of folded state for tests. Callers must
+// not mutate the returned map.
 func (m FleetModel) Scans() map[string]*v1.StatusEvent { return m.scans }
 
 // Init starts the refresh tick.
