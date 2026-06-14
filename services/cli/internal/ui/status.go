@@ -15,8 +15,8 @@ func PrintStatusLine(out io.Writer, ev *v1.StatusEvent) {
 	ts := time.Unix(ev.Timestamp, 0).UTC().Format(time.RFC3339)
 	state := StateStyle(ev.State.String()).Render(ev.State.String())
 	m := ev.GetMetrics()
-	fmt.Fprintf(out, "[%s] %-9s | %s | scanned=%d skipped=%d chunks=%d bytes=%d errors=%d\n",
-		ts, state, ev.Message,
+	fmt.Fprintf(out, "[%s] %-9s | src=%s | %s | scanned=%d skipped=%d chunks=%d bytes=%d errors=%d\n",
+		ts, state, ev.GetSource(), ev.Message,
 		m.GetBlobsScanned(), m.GetBlobsSkipped(),
 		m.GetChunksPublished(), m.GetBytesPublished(), m.GetErrorsTotal())
 }
