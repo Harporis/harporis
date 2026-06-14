@@ -50,6 +50,7 @@ func TestPublisher_PublishesChunkAndStatus(t *testing.T) {
 	var st v1.StatusEvent
 	require.NoError(t, proto.Unmarshal(smsgs[0].Data, &st))
 	require.Equal(t, v1.ScanState_COMPLETED, st.State)
+	require.Equal(t, "getter-test", st.Source)
 }
 
 func TestPublishStatusStampsSource(t *testing.T) {

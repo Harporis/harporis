@@ -90,7 +90,7 @@ func main() {
 
 	host, _ := os.Hostname()
 	if host == "" {
-		host = "scanner"
+		host = "unknown"
 	}
 	pub := scannernats.NewPublisher(cl.JS, time.Duration(cfg.PublishAckWaitSeconds)*time.Second, "scanner-"+host)
 

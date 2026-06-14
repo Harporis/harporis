@@ -67,7 +67,7 @@ func main() {
 	}
 	host, _ := os.Hostname()
 	if host == "" {
-		host = "getter"
+		host = "unknown"
 	}
 	publisher := getnats.NewPublisher(cl.JS, cfg.NATS.JetStream.PublishAckWaitSeconds, "getter-"+host)
 

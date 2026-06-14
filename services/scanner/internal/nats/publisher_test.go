@@ -95,5 +95,8 @@ func TestPublisher_StatusEventCarriesSecretsFound(t *testing.T) {
 	if ev.State != v1.ScanState_RUNNING {
 		t.Errorf("state = %v, want RUNNING", ev.State)
 	}
+	if ev.Source != "scanner-test" {
+		t.Errorf("source = %q, want scanner-test", ev.Source)
+	}
 	_ = msgs[0].Ack()
 }
