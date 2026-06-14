@@ -33,6 +33,7 @@ message StatusEvent {
   string       message       = 4;
   ScanMetrics  metrics       = 5;
   OutputConfig output_config = 6;
+  string       source        = 7;
 }
 
 message CancelScanRequest {
