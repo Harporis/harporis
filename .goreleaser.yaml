@@ -1,8 +1,9 @@
 # goreleaser config for the harporis CLI binary.
 #
 # Scope: this config publishes the operator CLI only. The three
-# services (getter, scanner, writer) ship as docker images via a
-# separate workflow (TODO) — outsiders rarely run them standalone.
+# services (getter, scanner, writer) ship as docker images via
+# .github/workflows/release-services.yml (GHCR, triggered by
+# <service>/vX.Y.Z tags) — outsiders rarely run them standalone.
 #
 # Triggered by tags matching `cli/v*` via .github/workflows/release-cli.yml.
 # Local dry-run:  goreleaser release --snapshot --clean

@@ -30,6 +30,13 @@ func TestSARIF_WritesValidReportPerScan(t *testing.T) {
 			t.Fatalf("Write %s: %v", f.FindingId, err)
 		}
 	}
+	// Streaming sink: the file is only valid after Finalize.
+	if err := s.Finalize(ctx, "scan-a"); err != nil {
+		t.Fatalf("Finalize scan-a: %v", err)
+	}
+	if err := s.Finalize(ctx, "scan-b"); err != nil {
+		t.Fatalf("Finalize scan-b: %v", err)
+	}
 
 	// scan-a has 2 findings.
 	pathA := filepath.Join(dir, "scan-a.sarif")
@@ -96,6 +103,9 @@ func TestSARIF_ContextRegionPopulatedWhenContextHarvested(t *testing.T) {
 	if err := s.Write(ctx, f); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+	if err := s.Finalize(ctx, "scan-ctx"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
 	b, err := os.ReadFile(filepath.Join(dir, "scan-ctx.sarif"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -132,6 +142,7 @@ func TestSARIF_NoContextRegionWhenScannerSkipsContext(t *testing.T) {
 		ScanId: "no-ctx", FindingId: "f1", RuleId: "x",
 		Severity: v1.Severity_LOW, FilePath: "a.txt", LineNumber: 1,
 	})
+	_ = s.Finalize(context.Background(), "no-ctx")
 	b, _ := os.ReadFile(filepath.Join(dir, "no-ctx.sarif"))
 	var doc sarifReport
 	if err := json.Unmarshal(b, &doc); err != nil {
@@ -162,7 +173,8 @@ func TestSARIF_RejectsInvalidScanID(t *testing.T) {
 			t.Errorf("Write with scan_id %q: want error, got nil", id)
 		}
 	}
-	// And no .sarif files should have materialized.
+	// And no .sarif files should have materialized — not even tempfiles
+	// (Write rejects before newScanState ever opens one).
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".sarif") {

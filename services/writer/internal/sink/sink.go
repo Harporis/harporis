@@ -43,6 +43,18 @@ type Sink interface {
 	Name() string
 }
 
+// Finalizer is an optional interface implemented by sinks that need a
+// per-scan "this scan is done" signal — typically streaming formats
+// whose output is incomplete until a footer / closing-bracket / index
+// is written. The writer dispatches Finalize when it observes a
+// terminal ScanState event for the scan_id on HARPORIS_STATUS.
+// Implementations MUST be idempotent (a scan with no findings still
+// receives Finalize when its terminal event arrives; a Finalize for an
+// unknown scan_id must be a no-op).
+type Finalizer interface {
+	Finalize(ctx context.Context, scanID string) error
+}
+
 // ErrSinkClosed is returned by Write after Close has run.
 var ErrSinkClosed = errors.New("sink: closed")
 

@@ -1,0 +1,70 @@
+# Release workflow for the three service docker images.
+#
+# Triggers on tags shaped `<service>/vX.Y.Z` where <service> is one
+# of getter/scanner/writer. Builds the per-service Dockerfile from
+# the repo root (each Dockerfile expects services/<svc>/ + kit/ +
+# contracts/ in scope), pushes to GHCR tagged with both the semver
+# and `latest`, and surfaces the build summary as a GH job step.
+name: release-services
+
+on:
+  push:
+    tags:
+      - "getter/v*"
+      - "scanner/v*"
+      - "writer/v*"
+
+permissions:
+  contents: read
+  packages: write   # required for ghcr.io push
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: derive service + version from tag
+        id: tag
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"
+          service="${ref%%/*}"
+          version="${ref#*/}"
+          echo "service=$service" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/harporis-$service" >> "$GITHUB_OUTPUT"
+
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup-buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: login-ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build-and-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ steps.tag.outputs.service }}/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.version }}
+            ${{ steps.tag.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: summary
+        run: |
+          {
+            echo "### Released ${{ steps.tag.outputs.service }} ${{ steps.tag.outputs.version }}"
+            echo ""
+            echo "- Image: \`${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.version }}\`"
+            echo "- Latest: \`${{ steps.tag.outputs.image }}:latest\`"
+            echo "- Platforms: linux/amd64, linux/arm64"
+          } >> "$GITHUB_STEP_SUMMARY"

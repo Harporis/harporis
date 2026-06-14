@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/signintech/gopdf"
 	"golang.org/x/image/font/gofont/gobold"
@@ -32,12 +31,8 @@ const PDFDefaultMaxPerScan = 10_000
 
 type PDF struct {
 	rootDir    string
-	maxPerScan int
 	maskSecret bool
-
-	mu     sync.Mutex
-	closed bool
-	scans  map[string][]*v1.Finding
+	acc        *BatchedAccumulator
 }
 
 // SetMaskSecrets toggles secret-masking in rendered cards. Off by
@@ -49,58 +44,49 @@ func NewPDF(rootDir string) (*PDF, error) {
 }
 
 func NewPDFN(rootDir string, maxPerScan int) (*PDF, error) {
+	return NewPDFConfig(rootDir, BatchConfig{MaxPerScan: maxPerScan})
+}
+
+func NewPDFConfig(rootDir string, cfg BatchConfig) (*PDF, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
 	}
-	if maxPerScan <= 0 {
-		maxPerScan = PDFDefaultMaxPerScan
+	if cfg.MaxPerScan <= 0 {
+		cfg.MaxPerScan = PDFDefaultMaxPerScan
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
-	return &PDF{
-		rootDir:    rootDir,
-		maxPerScan: maxPerScan,
-		scans:      make(map[string][]*v1.Finding),
-	}, nil
+	cfg.SinkLabel = "pdf_file"
+	p := &PDF{rootDir: rootDir}
+	p.acc = NewBatchedAccumulator(cfg, p.flush)
+	return p, nil
 }
 
 func (p *PDF) Name() string { return "pdf_file" }
 
 func (p *PDF) Write(ctx context.Context, f *v1.Finding) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if f == nil {
 		return fmt.Errorf("sink: nil Finding")
 	}
 	if err := kitscan.ValidateScanID(f.ScanId); err != nil {
 		return fmt.Errorf("sink: %w", err)
 	}
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return ErrSinkClosed
-	}
-	findings := append(p.scans[f.ScanId], f)
-	if len(findings) > p.maxPerScan {
-		p.mu.Unlock()
-		return fmt.Errorf("sink: scan %s exceeded max %d findings", f.ScanId, p.maxPerScan)
-	}
-	p.scans[f.ScanId] = findings
-	snapshot := make([]*v1.Finding, len(findings))
-	copy(snapshot, findings)
-	p.mu.Unlock()
-	return p.flush(f.ScanId, snapshot)
+	return p.acc.Add(ctx, f)
 }
 
-func (p *PDF) Close() error {
-	p.mu.Lock()
-	p.closed = true
-	p.scans = nil
-	p.mu.Unlock()
-	return nil
+func (p *PDF) Close() error { return p.acc.Close() }
+
+func (p *PDF) Flush() error { return p.acc.Flush() }
+
+// Finalize drains the pending buffer for scanID and drops state.
+func (p *PDF) Finalize(_ context.Context, scanID string) error {
+	return p.acc.Finalize(scanID)
 }
+
+// SetReplicaID stamps replica_id into the per-scan filename. See
+// BatchedAccumulator.SetReplicaID.
+func (p *PDF) SetReplicaID(id string) { p.acc.SetReplicaID(id) }
 
 // pdfStripControl makes a string safe for the PDF row: Go font covers
 // the Basic Multilingual Plane but Helvetica-style fallbacks for
@@ -181,7 +167,7 @@ func severityRGB(sev string) (uint8, uint8, uint8) {
 }
 
 func (p *PDF) flush(scanID string, findings []*v1.Finding) error {
-	path := filepath.Join(p.rootDir, scanID+".pdf")
+	path := filepath.Join(p.rootDir, scanID+p.acc.ReplicaSuffix()+".pdf")
 	rootClean := filepath.Clean(p.rootDir)
 	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
 		return fmt.Errorf("sink: path %q escapes rootDir %q", path, p.rootDir)

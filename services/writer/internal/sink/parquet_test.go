@@ -11,7 +11,7 @@ import (
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
 
-func TestParquet_WritesValidFilePerScan(t *testing.T) {
+func TestParquet_WritesValidFileAfterFinalize(t *testing.T) {
 	dir := t.TempDir()
 	p, err := NewParquet(dir)
 	if err != nil {
@@ -38,18 +38,26 @@ func TestParquet_WritesValidFilePerScan(t *testing.T) {
 		}
 	}
 
-	path := filepath.Join(dir, "scan-pq.parquet")
-	st, err := os.Stat(path)
+	// File is INCOMPLETE until Finalize — streaming Parquet doesn't
+	// emit a footer mid-scan. The final path doesn't exist yet.
+	finalPath := filepath.Join(dir, "scan-pq.parquet")
+	if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
+		t.Fatalf("final parquet must NOT exist before Finalize; stat err = %v", err)
+	}
+
+	if err := p.Finalize(ctx, "scan-pq"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	st, err := os.Stat(finalPath)
 	if err != nil {
-		t.Fatalf("stat: %v", err)
+		t.Fatalf("stat after Finalize: %v", err)
 	}
 	if st.Size() == 0 {
 		t.Fatalf("parquet file is empty")
 	}
 
-	// Round-trip: read back and verify the row shapes.
-	var got []parquetRow
-	got, err = parquet.ReadFile[parquetRow](path)
+	got, err := parquet.ReadFile[parquetRow](finalPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -73,6 +81,45 @@ func TestParquet_WritesValidFilePerScan(t *testing.T) {
 	}
 }
 
+func TestParquet_CloseFlushesPendingScans(t *testing.T) {
+	dir := t.TempDir()
+	p, err := NewParquet(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := p.Write(ctx, &v1.Finding{ScanId: "close-scan", FindingId: "f", RuleId: "r", Severity: v1.Severity_LOW, FilePath: "a"}); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	// Close drives the "operator hit Ctrl-C with one scan in flight"
+	// path: writes the footer + renames so the file is valid Parquet.
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	got, err := parquet.ReadFile[parquetRow](filepath.Join(dir, "close-scan.parquet"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("Close did not flush all rows: got %d, want 3", len(got))
+	}
+}
+
+func TestParquet_FinalizeUnknownScanIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	p, err := NewParquet(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	if err := p.Finalize(context.Background(), "never-saw-this"); err != nil {
+		t.Fatalf("Finalize unknown: %v", err)
+	}
+}
+
 func TestParquet_RejectsInvalidScanID(t *testing.T) {
 	dir := t.TempDir()
 	p, _ := NewParquet(dir)
@@ -83,7 +130,53 @@ func TestParquet_RejectsInvalidScanID(t *testing.T) {
 	}
 }
 
-func TestParquet_AccumulatorCap(t *testing.T) {
+func TestParquet_PostFinalizeWritesAreDropped(t *testing.T) {
+	dir := t.TempDir()
+	p, err := NewParquet(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	ctx := context.Background()
+
+	// Burst of findings + finalize.
+	for i := 0; i < 3; i++ {
+		if err := p.Write(ctx, &v1.Finding{ScanId: "late", FindingId: "f", RuleId: "x", Severity: v1.Severity_LOW, FilePath: "a"}); err != nil {
+			t.Fatalf("pre-finalize write %d: %v", i, err)
+		}
+	}
+	if err := p.Finalize(ctx, "late"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	finalPath := filepath.Join(dir, "late.parquet")
+	before, err := parquet.ReadFile[parquetRow](finalPath)
+	if err != nil {
+		t.Fatalf("ReadFile pre-stragglers: %v", err)
+	}
+	if len(before) != 3 {
+		t.Fatalf("pre-stragglers row count = %d, want 3", len(before))
+	}
+
+	// Stragglers arriving post-finalize must be silently dropped — NOT
+	// open a second writer that would clobber the existing file on rename.
+	for i := 0; i < 5; i++ {
+		if err := p.Write(ctx, &v1.Finding{ScanId: "late", FindingId: "f", RuleId: "x", Severity: v1.Severity_LOW, FilePath: "a"}); err != nil {
+			t.Fatalf("post-finalize write %d: %v (want nil; drop should be silent)", i, err)
+		}
+	}
+
+	// File must still hold exactly the pre-finalize rows.
+	after, err := parquet.ReadFile[parquetRow](finalPath)
+	if err != nil {
+		t.Fatalf("ReadFile post-stragglers: %v", err)
+	}
+	if len(after) != 3 {
+		t.Fatalf("post-stragglers row count = %d, want 3 (file was clobbered by re-open)", len(after))
+	}
+}
+
+func TestParquet_PerScanCap(t *testing.T) {
 	dir := t.TempDir()
 	p, err := NewParquetN(dir, 2)
 	if err != nil {
@@ -96,8 +189,7 @@ func TestParquet_AccumulatorCap(t *testing.T) {
 			t.Fatalf("write %d: %v", i, err)
 		}
 	}
-	// Third write should breach the cap and surface as an error.
 	if err := p.Write(ctx, &v1.Finding{ScanId: "cap-scan", FindingId: "f3", RuleId: "x", Severity: v1.Severity_LOW, FilePath: "a"}); err == nil {
-		t.Fatal("expected accumulator cap error")
+		t.Fatal("expected per-scan cap error")
 	}
 }

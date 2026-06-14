@@ -23,7 +23,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     mkdir -p /out && \
     cd services/writer && \
-    CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/writer ./cmd/writer
+    CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/writer ./cmd/writer && \
+    CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/writer-rebuild ./cmd/rebuild
 
 # ---------- runtime ----------
 FROM alpine:3.20
@@ -35,6 +36,7 @@ RUN apk add --no-cache ca-certificates && \
     chown -R harporis:harporis /var/lib/harporis
 
 COPY --from=build /out/writer /usr/local/bin/writer
+COPY --from=build /out/writer-rebuild /usr/local/bin/writer-rebuild
 COPY services/writer/config /etc/harporis
 
 USER harporis

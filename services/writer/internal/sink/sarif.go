@@ -1,79 +1,156 @@
-// SARIF v2.1.0 sink. Each scan_id materializes to <rootDir>/<scan_id>.sarif
-// containing a SARIF document with one `run` and N `result` entries. On
-// every Write the in-memory accumulator is rewritten to disk atomically
-// (tempfile + rename) so the file is always a parseable SARIF report.
+// Streaming SARIF sink. Writes a SARIF v2.1.0 report per scan_id to
+// <rootDir>/<scan_id>.sarif. Mirrors the Parquet streaming model:
 //
-// Tradeoffs:
-//   - Memory: bounded by maxPerScan findings per active scan_id. Past
-//     that, Write fails and the message Naks (with metric bump) instead
-//     of letting the writer OOM under a runaway producer.
-//   - I/O: each Write triggers a full re-serialize + tempfile + rename
-//     for the affected scan. Typical secret-scan output sizes (≤ a few
-//     thousand findings) keep this in the low-ms range. For pathological
-//     scans the operator should disable SARIF and rely on NDJSON.
-//   - Security: scan_id is validated via kit/scan, same as NDJSON. The
-//     containment check in flush() is belt-and-suspenders.
+//   * On the FIRST Write for a scan_id, the sink opens a tempfile and
+//     writes the SARIF document prefix up to the opening of
+//     `runs[0].results: [`.
+//   * Each subsequent Write appends one JSON-encoded `sarifResult` to
+//     the open tempfile (with comma separators). O(1) amortised per
+//     finding; O(N) total bytes written per scan.
+//   * Finalize(scanID) closes the results array + runs entry + runs
+//     array + outer object, fsyncs, and atomically renames the
+//     tempfile onto `<scan_id>.sarif`. Only then is the file a valid
+//     SARIF document.
+//   * Close() drains every still-open scan the same way on writer
+//     shutdown.
+//
+// Asymptotic cost:
+//   * Per Write: O(1) — one JSON marshal of one result + a write(2).
+//   * Total per scan: O(N) bytes.
+//   * Trade-off: the file is INCOMPLETE (no closing brackets) while
+//     the scan is running. SARIF readers opening `.<scan>.<hex>.sarif`
+//     mid-scan get parse errors until Finalize. The accumulator
+//     pattern previously used here gave partial-parseable files at
+//     the cost of O(N²/B) bytes written.
 
 package sink
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	kitscan "github.com/Harporis/harporis/kit/scan"
+	"github.com/Harporis/harporis/services/writer/internal/metrics"
 )
 
-// SARIFDefaultMaxPerScan caps the in-memory findings accumulator per scan.
-// Past this, Write returns an error (the caller will Nak with a metric
-// bump). 10k is comfortable for typical secret-scan output and well
-// below the 64-bit JSON array limit any tool consumes.
+const sarifSinkLabel = "sarif_file"
+
+// SARIFDefaultMaxPerScan caps the streamed results per scan. Past this
+// limit Write returns an error (NAK + metric bump upstream).
 const SARIFDefaultMaxPerScan = 10_000
 
-// SARIF emits one SARIF v2.1.0 report per scan_id to rootDir. The file
-// is rewritten on every Write so a partial scan is always inspectable.
-type SARIF struct {
-	rootDir    string
-	maxPerScan int
+// sarifMinIdleTimeout — same rationale as parquetMinIdleTimeout: the
+// idle sweeper is a BACKSTOP for missing terminal events, while
+// HARPORIS_STATUS terminal + finalize_grace_ms is the primary path.
+const sarifMinIdleTimeout = 30 * time.Second
 
-	mu     sync.Mutex
-	closed bool
-	scans  map[string][]*v1.Finding
+// sarifFinalizedCap bounds the post-finalize FIFO so stragglers from
+// a finalized scan are dropped via metric (not silently clobbering).
+const sarifFinalizedCap = 4096
+
+// SARIF emits one streaming .sarif file per scan_id.
+type SARIF struct {
+	rootDir     string
+	maxPerScan  int
+	idleTimeout time.Duration
+	replicaID   string
+
+	mu             sync.Mutex
+	closed         bool
+	scans          map[string]*sarifScanState
+	finalized      map[string]struct{}
+	finalizedOrder []string
+
+	stopCh chan struct{}
+	wg     sync.WaitGroup
 }
 
-// NewSARIF constructs a SARIF sink with the default per-scan cap.
+type sarifScanState struct {
+	mu        sync.Mutex
+	file      *os.File
+	bw        *bufferedJSONWriter
+	tmpPath   string
+	finalPath string
+	rowCount  int
+	closed    bool
+	lastWrite time.Time
+}
+
+// bufferedJSONWriter is a thin wrapper that tracks whether the first
+// result has been written, so subsequent results know to prefix a
+// comma. Keeping this on the state means Write doesn't have to consult
+// rowCount under a lock.
+type bufferedJSONWriter struct {
+	w     io.Writer
+	first bool // true until the first result is appended
+}
+
+// NewSARIF constructs a streaming SARIF sink. Defaults are identical
+// to the previous accumulator-backed constructor; existing callers
+// (writer/main.go, writer-rebuild, tests) keep working unchanged.
 func NewSARIF(rootDir string) (*SARIF, error) {
 	return NewSARIFN(rootDir, SARIFDefaultMaxPerScan)
 }
 
-// NewSARIFN exposes the per-scan accumulator cap for tests.
+// NewSARIFN is the legacy explicit-cap constructor.
 func NewSARIFN(rootDir string, maxPerScan int) (*SARIF, error) {
+	return NewSARIFConfig(rootDir, BatchConfig{MaxPerScan: maxPerScan})
+}
+
+// NewSARIFConfig accepts a BatchConfig. MaxPerScan caps in-memory
+// row count per scan; FlushInterval becomes the IDLE TIMEOUT for the
+// per-scan finalisation sweeper (floored at sarifMinIdleTimeout to
+// keep the sweeper a backstop). 0 disables the sweeper entirely.
+func NewSARIFConfig(rootDir string, cfg BatchConfig) (*SARIF, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("sink: rootDir is required")
 	}
-	if maxPerScan <= 0 {
-		maxPerScan = SARIFDefaultMaxPerScan
+	if cfg.MaxPerScan <= 0 {
+		cfg.MaxPerScan = SARIFDefaultMaxPerScan
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("sink: mkdir %s: %w", rootDir, err)
 	}
-	return &SARIF{
-		rootDir:    rootDir,
-		maxPerScan: maxPerScan,
-		scans:      make(map[string][]*v1.Finding),
-	}, nil
+	metrics.Init()
+	idleTimeout := cfg.FlushInterval
+	if idleTimeout > 0 && idleTimeout < sarifMinIdleTimeout {
+		idleTimeout = sarifMinIdleTimeout
+	}
+	s := &SARIF{
+		rootDir:     rootDir,
+		maxPerScan:  cfg.MaxPerScan,
+		idleTimeout: idleTimeout,
+		scans:       make(map[string]*sarifScanState),
+		finalized:   make(map[string]struct{}, sarifFinalizedCap),
+		stopCh:      make(chan struct{}),
+	}
+	if s.idleTimeout > 0 {
+		s.wg.Add(1)
+		go s.runIdleSweeper()
+	}
+	return s, nil
 }
 
-// Name returns the sink identifier used as a Prometheus label.
-func (s *SARIF) Name() string { return "sarif_file" }
+// Name returns the Prometheus sink label.
+func (s *SARIF) Name() string { return sarifSinkLabel }
 
-// Write appends f to the per-scan accumulator and rewrites the SARIF
-// file. Returns ErrSinkClosed after Close has run.
+// SetReplicaID stamps replica_id into the per-scan final filename so
+// multiple writer replicas don't race to rename onto the same path.
+// Empty (default) keeps `<scan_id>.sarif`.
+func (s *SARIF) SetReplicaID(id string) { s.replicaID = id }
+
+// Write appends one SARIF result to the open tempfile for f.ScanId.
+// Opens a new tempfile on the first sighting of a scan_id.
 func (s *SARIF) Write(ctx context.Context, f *v1.Finding) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -90,69 +167,241 @@ func (s *SARIF) Write(ctx context.Context, f *v1.Finding) error {
 		s.mu.Unlock()
 		return ErrSinkClosed
 	}
-	findings := append(s.scans[f.ScanId], f)
-	if len(findings) > s.maxPerScan {
+	if _, done := s.finalized[f.ScanId]; done {
 		s.mu.Unlock()
+		metrics.SinkPostFinalizeDropped.WithLabelValues(sarifSinkLabel).Inc()
+		return nil
+	}
+	st, ok := s.scans[f.ScanId]
+	if !ok {
+		var err error
+		st, err = s.newScanState(f.ScanId)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		s.scans[f.ScanId] = st
+	}
+	s.mu.Unlock()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed {
+		return ErrSinkClosed
+	}
+	if st.rowCount >= s.maxPerScan {
 		return fmt.Errorf("sink: scan %s exceeded max %d findings", f.ScanId, s.maxPerScan)
 	}
-	s.scans[f.ScanId] = findings
-	snapshot := make([]*v1.Finding, len(findings))
-	copy(snapshot, findings)
-	s.mu.Unlock()
-
-	return s.flush(f.ScanId, snapshot)
+	body, err := json.Marshal(findingToSARIF(f))
+	if err != nil {
+		return fmt.Errorf("sink: marshal sarif result: %w", err)
+	}
+	if !st.bw.first {
+		if _, err := st.bw.w.Write([]byte(",\n  ")); err != nil {
+			return fmt.Errorf("sink: write separator: %w", err)
+		}
+	} else {
+		if _, err := st.bw.w.Write([]byte("\n  ")); err != nil {
+			return fmt.Errorf("sink: write first indent: %w", err)
+		}
+		st.bw.first = false
+	}
+	if _, err := st.bw.w.Write(body); err != nil {
+		return fmt.Errorf("sink: write result: %w", err)
+	}
+	st.rowCount++
+	st.lastWrite = time.Now()
+	metrics.SinkPendingFindings.WithLabelValues(sarifSinkLabel).Inc()
+	return nil
 }
 
-// Close discards in-memory accumulators. Files on disk are left in their
-// last-written state (already valid SARIF reports). Idempotent.
+// Finalize closes the SARIF document for scanID, fsyncs, and renames
+// the tempfile onto the final path. No-op for unknown scan_ids.
+func (s *SARIF) Finalize(_ context.Context, scanID string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrSinkClosed
+	}
+	st, ok := s.scans[scanID]
+	if !ok {
+		s.mu.Unlock()
+		return nil
+	}
+	delete(s.scans, scanID)
+	s.markFinalizedLocked(scanID)
+	s.mu.Unlock()
+	return st.closeAndRename("terminal")
+}
+
+func (s *SARIF) markFinalizedLocked(scanID string) {
+	if _, exists := s.finalized[scanID]; exists {
+		return
+	}
+	s.finalized[scanID] = struct{}{}
+	s.finalizedOrder = append(s.finalizedOrder, scanID)
+	for len(s.finalizedOrder) > sarifFinalizedCap {
+		evict := s.finalizedOrder[0]
+		s.finalizedOrder = s.finalizedOrder[1:]
+		delete(s.finalized, evict)
+	}
+}
+
+// Close drains every still-open scan (writes the closing brackets,
+// renames). Idempotent.
 func (s *SARIF) Close() error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
 	s.closed = true
+	states := make([]*sarifScanState, 0, len(s.scans))
+	for _, st := range s.scans {
+		states = append(states, st)
+	}
 	s.scans = nil
 	s.mu.Unlock()
-	return nil
+
+	close(s.stopCh)
+	s.wg.Wait()
+
+	var firstErr error
+	for _, st := range states {
+		if err := st.closeAndRename("close"); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
-func (s *SARIF) flush(scanID string, findings []*v1.Finding) error {
-	path := filepath.Join(s.rootDir, scanID+".sarif")
+// Flush is a no-op for the streaming SARIF sink — same shape as the
+// streaming Parquet sink.
+func (s *SARIF) Flush() error { return nil }
+
+func (s *SARIF) runIdleSweeper() {
+	defer s.wg.Done()
+	tickEvery := s.idleTimeout / 2
+	if tickEvery < time.Second {
+		tickEvery = time.Second
+	}
+	t := time.NewTicker(tickEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-t.C:
+			s.finalizeIdleLocked()
+		}
+	}
+}
+
+func (s *SARIF) finalizeIdleLocked() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	var toFinalize []*sarifScanState
+	for id, st := range s.scans {
+		st.mu.Lock()
+		idle := !st.lastWrite.IsZero() && now.Sub(st.lastWrite) >= s.idleTimeout
+		st.mu.Unlock()
+		if idle {
+			toFinalize = append(toFinalize, st)
+			delete(s.scans, id)
+			s.markFinalizedLocked(id)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, st := range toFinalize {
+		_ = st.closeAndRename("idle")
+	}
+}
+
+func (s *SARIF) newScanState(scanID string) (*sarifScanState, error) {
+	finalName := scanID + ".sarif"
+	if s.replicaID != "" {
+		finalName = scanID + "." + s.replicaID + ".sarif"
+	}
+	finalPath := filepath.Join(s.rootDir, finalName)
 	rootClean := filepath.Clean(s.rootDir)
-	if !strings.HasPrefix(filepath.Clean(path), rootClean+string(filepath.Separator)) {
-		return fmt.Errorf("sink: path %q escapes rootDir %q", path, s.rootDir)
+	if !strings.HasPrefix(filepath.Clean(finalPath), rootClean+string(filepath.Separator)) {
+		return nil, fmt.Errorf("sink: path %q escapes rootDir %q", finalPath, s.rootDir)
 	}
-	doc := buildSARIF(findings)
-	data, err := json.MarshalIndent(doc, "", "  ")
+	// Tempfile name pattern matches SweepOrphanTempfiles' mint shape so
+	// orphan tempfiles from a crash mid-scan are cleaned up on startup.
+	var nonce [8]byte
+	_, _ = rand.Read(nonce[:])
+	tmpPath := filepath.Join(s.rootDir, fmt.Sprintf(".%s.%s.sarif", scanID, hex.EncodeToString(nonce[:])))
+	file, err := os.Create(tmpPath)
 	if err != nil {
-		return fmt.Errorf("sink: marshal sarif: %w", err)
+		return nil, fmt.Errorf("sink: sarif tempfile: %w", err)
 	}
-	tmp, err := os.CreateTemp(s.rootDir, scanID+".sarif.tmp-*")
-	if err != nil {
-		return fmt.Errorf("sink: tempfile: %w", err)
+	// Write the SARIF document prefix up to the start of the results
+	// array. The closing brackets (`]}]}`) land on Finalize/Close.
+	prefix := []byte(`{` + "\n" +
+		`  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",` + "\n" +
+		`  "version": "2.1.0",` + "\n" +
+		`  "runs": [{` + "\n" +
+		`    "tool": {"driver": {"name": "harporis", "informationUri": "https://github.com/Harporis/harporis"}},` + "\n" +
+		`    "results": [`)
+	if _, err := file.Write(prefix); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("sink: sarif prefix: %w", err)
 	}
-	tmpName := tmp.Name()
+	return &sarifScanState{
+		file:      file,
+		bw:        &bufferedJSONWriter{w: file, first: true},
+		tmpPath:   tmpPath,
+		finalPath: finalPath,
+	}, nil
+}
+
+func (st *sarifScanState) closeAndRename(trigger string) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed {
+		return nil
+	}
+	st.closed = true
+	rowCount := st.rowCount
+	defer func() {
+		if rowCount > 0 {
+			metrics.SinkPendingFindings.WithLabelValues(sarifSinkLabel).Sub(float64(rowCount))
+		}
+		metrics.SinkFlushTotal.WithLabelValues(sarifSinkLabel, trigger).Inc()
+	}()
 	cleanup := func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		_ = st.file.Close()
+		_ = os.Remove(st.tmpPath)
 	}
-	if _, err := tmp.Write(data); err != nil {
+	// Close results array + runs entry + runs array + outer object.
+	closer := []byte("\n  ]\n  }]\n}\n")
+	if _, err := st.file.Write(closer); err != nil {
 		cleanup()
-		return fmt.Errorf("sink: write tempfile: %w", err)
+		return fmt.Errorf("sink: sarif closer: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := st.file.Sync(); err != nil {
 		cleanup()
-		return fmt.Errorf("sink: sync tempfile: %w", err)
+		return fmt.Errorf("sink: sarif sync: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("sink: close tempfile: %w", err)
+	if err := st.file.Close(); err != nil {
+		_ = os.Remove(st.tmpPath)
+		return fmt.Errorf("sink: sarif close: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("sink: rename to %s: %w", path, err)
+	if err := os.Rename(st.tmpPath, st.finalPath); err != nil {
+		_ = os.Remove(st.tmpPath)
+		return fmt.Errorf("sink: sarif rename to %s: %w", st.finalPath, err)
 	}
 	return nil
 }
 
-// --- SARIF v2.1.0 wire types ---
+// --- SARIF v2.1.0 wire types (kept for downstream readers + tests) ---
 
 type sarifReport struct {
 	Schema  string     `json:"$schema"`
@@ -177,7 +426,7 @@ type sarifDriver struct {
 
 type sarifResult struct {
 	RuleID              string            `json:"ruleId,omitempty"`
-	Level               string            `json:"level"` // note/warning/error
+	Level               string            `json:"level"`
 	Message             sarifMessage      `json:"message"`
 	Locations           []sarifLocation   `json:"locations,omitempty"`
 	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
@@ -202,31 +451,13 @@ type sarifArtifactLocation struct {
 }
 
 type sarifRegion struct {
-	StartLine int32          `json:"startLine,omitempty"`
-	EndLine   int32          `json:"endLine,omitempty"`
-	Snippet   *sarifSnippet  `json:"snippet,omitempty"`
+	StartLine int32         `json:"startLine,omitempty"`
+	EndLine   int32         `json:"endLine,omitempty"`
+	Snippet   *sarifSnippet `json:"snippet,omitempty"`
 }
 
 type sarifSnippet struct {
 	Text string `json:"text"`
-}
-
-func buildSARIF(findings []*v1.Finding) sarifReport {
-	results := make([]sarifResult, 0, len(findings))
-	for _, f := range findings {
-		results = append(results, findingToSARIF(f))
-	}
-	return sarifReport{
-		Schema:  "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
-		Version: "2.1.0",
-		Runs: []sarifRun{{
-			Tool: sarifTool{Driver: sarifDriver{
-				Name:           "harporis",
-				InformationURI: "https://github.com/Harporis/harporis",
-			}},
-			Results: results,
-		}},
-	}
 }
 
 func findingToSARIF(f *v1.Finding) sarifResult {
@@ -240,8 +471,6 @@ func findingToSARIF(f *v1.Finding) sarifResult {
 	}
 	region := buildRegion(f.LineNumber, f.LineNumberEnd)
 	context := buildContextRegion(f)
-	// Prefer the DIFF_WINDOW shape (FilePath + LineNumber directly on
-	// the Finding); fall back to BLOB-source refs (one location per ref).
 	if f.FilePath != "" {
 		r.Locations = []sarifLocation{{
 			PhysicalLocation: sarifPhysicalLocation{
@@ -279,16 +508,10 @@ func buildRegion(start, end int32) *sarifRegion {
 	return r
 }
 
-// buildContextRegion folds the harvested context_before + matched_line
-// + context_after into a single SARIF contextRegion. Returns nil when
-// no context was harvested (preserves the pre-context-feature shape).
 func buildContextRegion(f *v1.Finding) *sarifRegion {
 	if len(f.ContextBefore) == 0 && len(f.ContextAfter) == 0 {
 		return nil
 	}
-	// startLine of the context window = line_number - len(context_before),
-	// clamped to 1 because line numbers are 1-based and the harvester
-	// may not have padded all the way (chunk-edge truncation).
 	start := f.LineNumber - int32(len(f.ContextBefore))
 	if start < 1 {
 		start = 1

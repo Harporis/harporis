@@ -27,6 +27,61 @@ func newFindingsCmd() *cobra.Command {
 	}
 	c.AddCommand(newFindingsShowCmd())
 	c.AddCommand(newFindingsListCmd())
+	c.AddCommand(newFindingsRebuildCmd())
+	return c
+}
+
+// rebuildFormats is the closed set of targets writer-rebuild accepts.
+// NDJSON is excluded — it IS the source of truth, can't be a target.
+var rebuildFormats = []string{"sarif", "html", "xlsx", "pdf", "parquet"}
+
+func newFindingsRebuildCmd() *cobra.Command {
+	var format string
+	c := &cobra.Command{
+		Use:   "rebuild <scan_id>",
+		Short: "reconstruct a stale sink file from the scan's NDJSON",
+		Long: "Replays the authoritative <scan_id>.ndjson through the writer's sink " +
+			"machinery and writes a fresh <scan_id>.<ext>. Useful when an accumulator " +
+			"sink (SARIF/HTML/XLSX/PDF) lost its last batch to a writer crash, or when " +
+			"a Parquet tempfile was orphaned before Finalize.\n\n" +
+			"Runs via `docker compose exec writer writer-rebuild`, so the rebuilt file " +
+			"lands inside the writer container's /var/lib/harporis/findings — the same " +
+			"mount the live writer uses.\n\n" +
+			"Supported --format values: " + strings.Join(rebuildFormats, ", ") + ".",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			scanID := args[0]
+			if !validScanID(scanID) {
+				return fmt.Errorf("invalid scan_id %q (use UUID-ish chars only)", scanID)
+			}
+			if !slices.Contains(rebuildFormats, format) {
+				return fmt.Errorf("unknown --format %q (want one of: %s)", format, strings.Join(rebuildFormats, ", "))
+			}
+			co, err := compose.NewDefault()
+			if err != nil {
+				return fmt.Errorf("docker compose not available: %w", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			body, err := co.Exec(ctx, "writer",
+				"/usr/local/bin/writer-rebuild",
+				"--scan-id", scanID,
+				"--format", format,
+			)
+			if body != "" {
+				_, _ = cmd.OutOrStdout().Write([]byte(body))
+				if !strings.HasSuffix(body, "\n") {
+					fmt.Fprintln(cmd.OutOrStdout())
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("writer-rebuild: %w", err)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVarP(&format, "format", "f", "", "target format: "+strings.Join(rebuildFormats, "|")+" (required)")
+	_ = c.MarkFlagRequired("format")
 	return c
 }
 

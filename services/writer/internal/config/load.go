@@ -33,12 +33,34 @@ type Config struct {
 	XLSXEnabled    *bool  `yaml:"xlsx_enabled"`
 	PDFEnabled     *bool  `yaml:"pdf_enabled"`
 	ParquetEnabled *bool  `yaml:"parquet_enabled"`
+	SQLiteEnabled  *bool  `yaml:"sqlite_enabled"`
+	// FlushBatch — accumulator sinks (SARIF/HTML/XLSX/PDF/Parquet)
+	// flush after this many NEW findings; <= 1 = sync flush on every
+	// Finding (legacy O(N^2) behaviour).
+	FlushBatch int `yaml:"flush_batch"`
+	// FlushIntervalMs — periodic ticker that catches idle buffers so
+	// partial-scan reports stay fresh; 0 disables the ticker.
+	FlushIntervalMs int `yaml:"flush_interval_ms"`
+	// FinalizeGraceMs — delay between observing a terminal ScanState
+	// event on HARPORIS_STATUS and actually calling Finalize on the
+	// sinks. Buys the pipeline (scanner → writer) time to drain after
+	// getter's "scan finished" event arrives at writer.
+	FinalizeGraceMs int `yaml:"finalize_grace_ms"`
 	// MaskSecrets, when true, renders matched_secret as first-4 chars +
 	// "***" in human-facing sinks (HTML + PDF). NDJSON/SARIF/XLSX still
 	// carry the raw secret because their primary use cases (jq
 	// pipelines, code-scanning ingestion, spreadsheet triage) need it.
 	// Default: false (don't break existing operator expectations).
 	MaskSecrets *bool `yaml:"mask_secrets"`
+	// Findings retention. Both default to 0 (disabled) so existing
+	// operators see no behaviour change. Set either to enable the
+	// hourly sweep that prunes old sink files from output_dir.
+	//   RetentionAgeHours: delete files older than N hours (0 = off)
+	//   RetentionMaxBytes: oldest-first evict until total ≤ N bytes (0 = off)
+	//   RetentionIntervalSeconds: sweep cadence (default 3600).
+	RetentionAgeHours       int   `yaml:"retention_age_hours"`
+	RetentionMaxBytes       int64 `yaml:"retention_max_bytes"`
+	RetentionIntervalSeconds int  `yaml:"retention_interval_seconds"`
 	MetricsAddr   string `yaml:"metrics_addr"`
 	LogLevel      string `yaml:"log_level"`
 }
@@ -104,9 +126,28 @@ func applyDefaults(c *Config) {
 		v := true
 		c.ParquetEnabled = &v
 	}
+	if c.SQLiteEnabled == nil {
+		// Default OFF — keeps the on-disk footprint of an idle stack to
+		// the existing six sinks. Operators opt in when they need
+		// cross-scan queries.
+		v := false
+		c.SQLiteEnabled = &v
+	}
 	if c.MaskSecrets == nil {
 		v := false
 		c.MaskSecrets = &v
+	}
+	if c.FlushBatch <= 0 {
+		c.FlushBatch = 50
+	}
+	if c.FlushIntervalMs <= 0 {
+		c.FlushIntervalMs = 2000
+	}
+	if c.FinalizeGraceMs <= 0 {
+		c.FinalizeGraceMs = 10_000
+	}
+	if c.RetentionIntervalSeconds <= 0 {
+		c.RetentionIntervalSeconds = 3600
 	}
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = fmt.Sprintf(":%d", wire.MetricsPorts[wire.ServiceWriter])

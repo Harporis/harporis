@@ -87,6 +87,24 @@ func (c *Compose) Exec(ctx context.Context, service string, cmd ...string) (stri
 	return c.r.Run(ctx, append([]string{"__direct__"}, args...)...)
 }
 
+// CopyFromContainer copies a file from a running container to the
+// host. Uses `docker cp` so the transfer is binary-safe (unlike
+// `exec cat`, which can have its stdout mangled by TrimRight and TTY
+// allocation). The destination must be a path the operator's user
+// owns — docker cp preserves the source mode but the parent dir
+// must already exist (callers do MkdirAll first).
+func (c *Compose) CopyFromContainer(ctx context.Context, service, containerPath, hostPath string) error {
+	container, err := c.resolveContainer(ctx, service)
+	if err != nil {
+		return err
+	}
+	out, err := c.r.Run(ctx, "__direct__", "cp", container+":"+containerPath, hostPath)
+	if err != nil {
+		return fmt.Errorf("docker cp %s:%s %s: %w (%s)", container, containerPath, hostPath, err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 // resolveContainer returns the name of a running container for the
 // (project, service) tuple. Returns an error if none is running —
 // the caller can surface that as "the stack isn't up yet".
