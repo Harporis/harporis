@@ -16,6 +16,7 @@ output_dir: "${HARPORIS_OUTPUT_DIR:-/var/lib/harporis/findings}"
 ndjson_enabled: true        # one .ndjson per scan_id (streaming-friendly, jq input)
 sarif_enabled: true         # one .sarif per scan_id (SARIF v2.1.0, IDE/SCM integrations)
 parquet_enabled: true       # one .parquet per scan_id (SIEM / data-warehouse / DuckDB ingestion)
+sqlite_enabled: ${HARPORIS_SQLITE_ENABLED:-false}  # shared findings.db for cross-scan SQL queries (sqlite3 findings/findings.db). Off by default — opt in when you actually want cross-scan analytics.
 mask_secrets: false         # when true, HTML+PDF render secret[:4] + "***" (NDJSON/SARIF/XLSX/Parquet always carry raw secrets)
 # Accumulator-sink batching. Each accumulator sink (SARIF/HTML/XLSX/PDF/Parquet)
 # coalesces per-finding writes — instead of rewriting the full file on every

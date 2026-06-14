@@ -24,7 +24,7 @@ import (
 // — what `harporis scan --format` is allowed to request. Distinct from
 // the read-side `findings show --format` set (which also includes
 // CLI-derived shapes like pretty/json/csv/md).
-var writerFormats = []string{"ndjson", "sarif", "html", "xlsx", "pdf", "parquet"}
+var writerFormats = []string{"ndjson", "sarif", "html", "xlsx", "pdf", "parquet", "sqlite"}
 
 // maxContextLines caps `--context` client-side so an operator typo
 // (e.g. 100000) gets a friendly error instead of silently shipping a

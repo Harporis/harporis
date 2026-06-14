@@ -77,7 +77,8 @@ Re-run the installer any time — every step is idempotent.
 | `HARPORIS_FINDINGS_DIR` | `./findings` (next to `docker-compose.yml`) | Host directory for materialized reports. Writer runs as host `${UID}:${GID}` so files are operator-owned. |
 | `services/scanner/rules/default.yaml` | bind-mounted RO into scanner | Edit on the host; scanner re-parses + atomic-swaps within 5s. Invalid YAML preserves the previous pack (logged at Warn). |
 | `NATS_TOKEN` | `harporis-dev` (compose substitution) | Required by NATS auth. CLI auto-discovers from `docker inspect harporis-nats` on localhost URLs; production must set explicitly. |
-| `harporis scan -f <list>` | empty = every enabled sink fires | Per-scan format selection. Accepted: `ndjson`, `sarif`, `html`, `xlsx`, `pdf`, `parquet`. |
+| `HARPORIS_SQLITE_ENABLED` | `false` | Toggle the SQLite sink (one shared `findings.db` for cross-scan SQL queries). Opt-in: `HARPORIS_SQLITE_ENABLED=true docker compose up -d`. |
+| `harporis scan -f <list>` | empty = every enabled sink fires | Per-scan format selection. Accepted: `ndjson`, `sarif`, `html`, `xlsx`, `pdf`, `parquet`, `sqlite`. |
 | `harporis findings show -f <fmt>` | `ndjson` | Read-side formats: `ndjson`, `pretty`, `sarif`, `json`, `csv`, `md`, `html`, `xlsx`, `pdf`, `parquet`. |
 
 ## Scaling

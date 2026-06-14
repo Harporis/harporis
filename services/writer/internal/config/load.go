@@ -33,6 +33,7 @@ type Config struct {
 	XLSXEnabled    *bool  `yaml:"xlsx_enabled"`
 	PDFEnabled     *bool  `yaml:"pdf_enabled"`
 	ParquetEnabled *bool  `yaml:"parquet_enabled"`
+	SQLiteEnabled  *bool  `yaml:"sqlite_enabled"`
 	// FlushBatch — accumulator sinks (SARIF/HTML/XLSX/PDF/Parquet)
 	// flush after this many NEW findings; <= 1 = sync flush on every
 	// Finding (legacy O(N^2) behaviour).
@@ -124,6 +125,13 @@ func applyDefaults(c *Config) {
 	if c.ParquetEnabled == nil {
 		v := true
 		c.ParquetEnabled = &v
+	}
+	if c.SQLiteEnabled == nil {
+		// Default OFF — keeps the on-disk footprint of an idle stack to
+		// the existing six sinks. Operators opt in when they need
+		// cross-scan queries.
+		v := false
+		c.SQLiteEnabled = &v
 	}
 	if c.MaskSecrets == nil {
 		v := false

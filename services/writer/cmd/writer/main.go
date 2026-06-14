@@ -155,6 +155,16 @@ func main() {
 		}
 		sinks = append(sinks, ps)
 	}
+	if cfg.SQLiteEnabled != nil && *cfg.SQLiteEnabled {
+		sq, err := sink.NewSQLite(cfg.OutputDir)
+		if err != nil {
+			fatal("init sqlite sink: %v", err)
+		}
+		if replicaID != "" {
+			sq.SetReplicaID(replicaID)
+		}
+		sinks = append(sinks, sq)
+	}
 	if cfg.ParquetEnabled != nil && *cfg.ParquetEnabled {
 		pq, err := sink.NewParquetConfig(cfg.OutputDir, batchCfg)
 		if err != nil {
@@ -166,7 +176,7 @@ func main() {
 		sinks = append(sinks, pq)
 	}
 	if len(sinks) == 0 {
-		fatal("no sinks enabled — set at least one of ndjson_enabled, sarif_enabled, html_enabled, xlsx_enabled, pdf_enabled, parquet_enabled to true in writer.yaml")
+		fatal("no sinks enabled — set at least one of ndjson_enabled, sarif_enabled, html_enabled, xlsx_enabled, pdf_enabled, parquet_enabled, sqlite_enabled to true in writer.yaml")
 	}
 
 	// Sweep orphaned tempfiles from prior crashes mid-flush. The

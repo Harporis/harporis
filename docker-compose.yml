@@ -167,6 +167,11 @@ services:
       # in `-<N>` (compose containers do, so leaving this unset works
       # with `docker compose up -d --scale writer=N`).
       HARPORIS_FINDINGS_SHARDS: "${HARPORIS_FINDINGS_SHARDS:-1}"
+      # Toggles the SQLite sink (one shared findings/findings.db with a
+      # `findings` table indexed by scan_id/severity/rule/time). Default
+      # off — opt-in via:
+      #   HARPORIS_SQLITE_ENABLED=true docker compose up -d
+      HARPORIS_SQLITE_ENABLED: "${HARPORIS_SQLITE_ENABLED:-false}"
     expose:
       - "9102"
     volumes:
