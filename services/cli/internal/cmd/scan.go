@@ -16,6 +16,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	kitscan "github.com/Harporis/harporis/kit/scan"
 	"github.com/Harporis/harporis/services/cli/internal/compose"
 	"github.com/Harporis/harporis/services/cli/internal/natscli"
 )
@@ -55,6 +56,11 @@ func newScanCmd() *cobra.Command {
 			}
 			if scanID == "" {
 				scanID = uuid.NewString()
+			}
+			// Validate with the shared kit/scan rule so the CLI rejects
+			// exactly what the getter/writer would, before submitting.
+			if err := kitscan.ValidateScanID(scanID); err != nil {
+				return err
 			}
 			// Range presets are mutually exclusive shortcuts that expand
 			// into --type / --from / --to. Resolve them first so the
