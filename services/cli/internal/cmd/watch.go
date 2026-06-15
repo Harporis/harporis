@@ -177,14 +177,15 @@ func RunFleetTUI(cl *natscli.Client, natsURL string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Seed snapshot (newest state per scan) before tailing live.
-	if seed, err := cl.ListHistory(0, 1*time.Second); err == nil {
-		for _, ev := range seed {
-			p.Send(tui.StatusEventMsg{Ev: ev})
-		}
-	}
-
 	go func() {
+		// Seed snapshot (newest state per scan), then tail live. Both run
+		// in this goroutine: p.Send must run concurrently with p.Run()
+		// consuming messages — sending before Run() starts would deadlock.
+		if seed, err := cl.ListHistory(0, 1*time.Second); err == nil {
+			for _, ev := range seed {
+				p.Send(tui.StatusEventMsg{Ev: ev})
+			}
+		}
 		for ctx.Err() == nil {
 			events, err := natscli.FetchStatusEvents(sub, 2*time.Second)
 			if err != nil {
