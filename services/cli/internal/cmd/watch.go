@@ -41,6 +41,9 @@ func newWatchCmd() *cobra.Command {
 			}
 			// Fleet mode: no scan-id.
 			if len(args) == 0 {
+				if cmd.Flags().Changed("timeout") {
+					fmt.Fprintln(os.Stderr, "note: --timeout is ignored in fleet mode (no scan-id); the dashboard runs until you quit")
+				}
 				if !jsonOut && isatty.IsTerminal(os.Stdout.Fd()) {
 					return RunFleetTUI(cl, natsURL)
 				}
@@ -64,10 +67,12 @@ func newWatchCmd() *cobra.Command {
 func writeStatusJSON(out io.Writer, ev *v1.StatusEvent) {
 	raw, err := protojson.Marshal(ev)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "skip status event %q: marshal: %v\n", ev.GetScanId(), err)
 		return
 	}
 	var buf bytes.Buffer
 	if err := json.Compact(&buf, raw); err != nil {
+		fmt.Fprintf(os.Stderr, "skip status event %q: compact: %v\n", ev.GetScanId(), err)
 		return
 	}
 	buf.WriteByte('\n')
