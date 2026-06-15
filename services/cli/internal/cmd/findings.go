@@ -240,9 +240,6 @@ func filterNDJSONBySeverity(body string, set severity.Set) (string, error) {
 	return b.String(), nil
 }
 
-// readFindingsFile returns the contents of <output_dir>/<scan_id><ext>
-// either from a host directory (--output-dir) or via
-// `docker compose exec writer cat`. ext is ".ndjson" or ".sarif".
 // regenProxyWithSeverity regenerates a binary/proxy format (sarif/html/
 // xlsx/pdf/parquet) filtered by severity, by replaying the scan's NDJSON
 // through writer-rebuild inside the writer container, then reading the
@@ -268,7 +265,11 @@ func regenProxyWithSeverity(scanID, format, severityCSV, outputDir string) (stri
 	defer cancel()
 
 	if out, err := co.Exec(ctx, "writer", "mkdir", "-p", tmpDir); err != nil {
-		return "", fmt.Errorf("mkdir temp: %s", strings.TrimSpace(out))
+		detail := strings.TrimSpace(out)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("mkdir temp: %s", detail)
 	}
 
 	if out, err := co.Exec(ctx, "writer",
@@ -297,6 +298,9 @@ func regenProxyWithSeverity(scanID, format, severityCSV, outputDir string) (stri
 	return body, nil
 }
 
+// readFindingsFile returns the contents of <output_dir>/<scan_id><ext>
+// either from a host directory (--output-dir) or via
+// `docker compose exec writer cat`. ext is ".ndjson" or ".sarif".
 func readFindingsFile(scanID, ext, outputDir string) (string, error) {
 	if outputDir != "" {
 		b, err := os.ReadFile(outputDir + "/" + scanID + ext)
