@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -50,5 +52,37 @@ output_dir: "${HARPORIS_OUT:-/tmp/findings}"
 	}
 	if c.OutputDir != "/tmp/findings" {
 		t.Errorf("env default not applied: %q", c.OutputDir)
+	}
+}
+
+func TestSeveritySet_Valid(t *testing.T) {
+	c := &Config{Severities: []string{"CRITICAL", "HIGH"}}
+	set, err := c.SeveritySet()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !set.Contains(v1.Severity_CRITICAL) || !set.Contains(v1.Severity_HIGH) {
+		t.Fatalf("expected CRITICAL+HIGH in set")
+	}
+	if set.Contains(v1.Severity_LOW) {
+		t.Fatalf("LOW should be filtered out")
+	}
+}
+
+func TestSeveritySet_EmptyMeansAll(t *testing.T) {
+	c := &Config{Severities: nil}
+	set, err := c.SeveritySet()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !set.Contains(v1.Severity_LOW) {
+		t.Fatalf("empty severities should pass all levels")
+	}
+}
+
+func TestSeveritySet_UnknownLevelErrors(t *testing.T) {
+	c := &Config{Severities: []string{"BOGUS"}}
+	if _, err := c.SeveritySet(); err == nil {
+		t.Fatalf("expected error for unknown level")
 	}
 }

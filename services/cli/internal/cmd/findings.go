@@ -16,7 +16,10 @@ import (
 	"unicode"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 
+	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/contracts/severity"
 	kitscan "github.com/Harporis/harporis/kit/scan"
 	"github.com/Harporis/harporis/services/cli/internal/compose"
 )
@@ -106,6 +109,7 @@ func newFindingsShowCmd() *cobra.Command {
 	var outputDir string
 	var pretty bool
 	var format string
+	var severityCSV string
 	c := &cobra.Command{
 		Use:   "show <scan_id>",
 		Short: "print findings for a scan in the requested format",
@@ -122,7 +126,10 @@ func newFindingsShowCmd() *cobra.Command {
 			"  html    self-contained browser report with sort + filter\n" +
 			"  xlsx    Excel workbook (audit/triage in spreadsheets)\n" +
 			"  pdf     printable A4 report (formal hand-off / compliance binder)\n" +
-			"  parquet columnar workbook (SIEM ingestion, DuckDB/Polars/Athena)",
+			"  parquet columnar workbook (SIEM ingestion, DuckDB/Polars/Athena)" +
+			"\nUse --severity CRITICAL,HIGH to keep only those levels (text " +
+			"formats filtered in-process; binary formats regenerated via " +
+			"writer-rebuild, leaving the on-disk report untouched).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanID := args[0]
@@ -139,19 +146,42 @@ func newFindingsShowCmd() *cobra.Command {
 				return fmt.Errorf("unknown --format %q (want one of: %s)", format, strings.Join(supportedFormats, ", "))
 			}
 
-			ext := ".ndjson"
-			if v, ok := formatToExt[format]; ok {
-				ext = v
-			}
-			body, err := readFindingsFile(scanID, ext, outputDir)
+			sevSet, err := severity.ParseCSV(severityCSV)
 			if err != nil {
 				return err
 			}
 
+			ext := ".ndjson"
+			if v, ok := formatToExt[format]; ok {
+				ext = v
+			}
+			var body string
+			if _, isProxy := formatToExt[format]; isProxy && len(sevSet) > 0 {
+				// Binary/proxy format + severity filter: regenerate a
+				// filtered copy from NDJSON via writer-rebuild; the
+				// canonical <scan>.<ext> on disk is left untouched.
+				body, err = regenProxyWithSeverity(scanID, format, severityCSV, outputDir)
+				if err != nil {
+					return err
+				}
+			} else {
+				body, err = readFindingsFile(scanID, ext, outputDir)
+				if err != nil {
+					return err
+				}
+				// Text formats derive from NDJSON; filter in-process.
+				if _, isProxy := formatToExt[format]; !isProxy {
+					body, err = filterNDJSONBySeverity(body, sevSet)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
 			switch format {
-			case "ndjson", "sarif", "html", "xlsx", "pdf":
+			case "ndjson", "sarif", "html", "xlsx", "pdf", "parquet":
 				// Stream raw — writer already wrote this format to disk.
-				// xlsx/pdf are binary; stdout still works (`> file.pdf`).
+				// xlsx/pdf/parquet are binary; stdout still works (`> file.pdf`).
 				if _, err := cmd.OutOrStdout().Write([]byte(body)); err != nil {
 					return err
 				}
@@ -176,7 +206,101 @@ func newFindingsShowCmd() *cobra.Command {
 	c.Flags().StringVar(&outputDir, "output-dir", "", "read findings files from a host path instead of `docker compose exec writer cat`")
 	c.Flags().BoolVar(&pretty, "pretty", false, "(deprecated) shorthand for --format pretty")
 	c.Flags().StringVarP(&format, "format", "f", "ndjson", "output format: "+strings.Join(supportedFormats, "|"))
+	c.Flags().StringVar(&severityCSV, "severity", "", "comma-separated severity levels to KEEP (e.g. CRITICAL,HIGH); empty = all")
 	return c
+}
+
+// filterNDJSONBySeverity keeps only NDJSON lines whose Finding.severity is
+// in set. An empty set returns body unchanged (no filter). Used for the
+// text-rendered formats (ndjson/pretty/json/csv/md) which all derive from
+// the on-disk NDJSON.
+func filterNDJSONBySeverity(body string, set severity.Set) (string, error) {
+	if len(set) == 0 {
+		return body, nil
+	}
+	var b strings.Builder
+	sc := bufio.NewScanner(strings.NewReader(body))
+	sc.Buffer(make([]byte, 0, 256*1024), 16*1024*1024)
+	um := protojson.UnmarshalOptions{DiscardUnknown: true}
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var f v1.Finding
+		if err := um.Unmarshal(line, &f); err != nil {
+			return "", fmt.Errorf("decode ndjson line: %w", err)
+		}
+		if !set.Contains(f.Severity) {
+			continue
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("read ndjson: %w", err)
+	}
+	return b.String(), nil
+}
+
+// regenProxyWithSeverity regenerates a binary/proxy format (sarif/html/
+// xlsx/pdf/parquet) filtered by severity, by replaying the scan's NDJSON
+// through writer-rebuild inside the writer container, then reading the
+// result back. The canonical <scan>.<ext> on disk is untouched: rebuild
+// writes to a temp dir, we cat it, then delete it.
+//
+// Only available in docker-compose mode; with --output-dir there is no
+// writer container to run the rebuild.
+func regenProxyWithSeverity(scanID, format, severityCSV, outputDir string) (string, error) {
+	if outputDir != "" {
+		return "", fmt.Errorf("--severity on format %q needs the writer container (writer-rebuild); "+
+			"omit --output-dir to use docker compose, set `severities` in writer.yaml, or use a text format", format)
+	}
+	co, err := compose.NewDefault()
+	if err != nil {
+		return "", fmt.Errorf("docker compose not available: %w", err)
+	}
+	ext := formatToExt[format]
+	// Per-invocation temp dir so concurrent `findings show --severity` runs
+	// (even for the same scan_id) don't race on the same regenerated file.
+	tmpDir := fmt.Sprintf("/tmp/harporis-sevfilter-%d-%d", os.Getpid(), time.Now().UnixNano())
+	tmpFile := tmpDir + "/" + scanID + ext
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	if out, err := co.Exec(ctx, "writer", "mkdir", "-p", tmpDir); err != nil {
+		detail := strings.TrimSpace(out)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("mkdir temp: %s", detail)
+	}
+
+	if out, err := co.Exec(ctx, "writer",
+		"/usr/local/bin/writer-rebuild",
+		"--scan-id", scanID,
+		"--format", format,
+		"--severity", severityCSV,
+		"--output-dir", tmpDir,
+	); err != nil {
+		detail := strings.TrimSpace(out)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("writer-rebuild --severity: %s", detail)
+	}
+
+	body, readErr := co.Exec(ctx, "writer", "cat", tmpFile)
+	_, _ = co.Exec(ctx, "writer", "rm", "-rf", tmpDir)
+	if readErr != nil {
+		detail := strings.TrimSpace(body)
+		if detail == "" {
+			detail = readErr.Error()
+		}
+		return "", fmt.Errorf("read regenerated %s: %s", scanID+ext, detail)
+	}
+	return body, nil
 }
 
 // readFindingsFile returns the contents of <output_dir>/<scan_id><ext>

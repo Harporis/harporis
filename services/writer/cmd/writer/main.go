@@ -255,6 +255,11 @@ func main() {
 		fatal("create status consumer: %v", err)
 	}
 
+	severitySet, err := cfg.SeveritySet()
+	if err != nil {
+		fatal("invalid severities config: %v", err)
+	}
+
 	// Worker goroutines.
 	var workerWG sync.WaitGroup
 	for i := 0; i < cfg.Workers; i++ {
@@ -263,6 +268,10 @@ func main() {
 			defer workerWG.Done()
 			h.SetWorkerStarted(true)
 			err := consumer.Run(rootCtx, func(ctx context.Context, f *v1.Finding) error {
+				if !severitySet.Contains(f.Severity) {
+					metrics.SinkSeverityDropped.WithLabelValues(f.Severity.String()).Inc()
+					return nil
+				}
 				// Fan-out to enabled sinks, optionally narrowed by
 				// f.OutputFormats — per-scan format selection set at
 				// scan submission (ScanRequest.output.formats). Empty

@@ -18,6 +18,7 @@ var (
 	SinkWrites             *prometheus.CounterVec   // labels: sink, severity
 	SinkErrors             *prometheus.CounterVec   // labels: sink, reason
 	SinkFormatIgnored      *prometheus.CounterVec   // labels: requested_format
+	SinkSeverityDropped    *prometheus.CounterVec   // labels: severity
 	SinkFlushSeconds       *prometheus.HistogramVec // labels: sink
 	SinkFlushTotal         *prometheus.CounterVec   // labels: sink, trigger
 	SinkFlushBatchSize     *prometheus.HistogramVec // labels: sink
@@ -46,6 +47,10 @@ func Init() {
 			Name: "writer_sink_format_ignored_total",
 			Help: "Findings whose per-scan -f named a format that has no enabled sink (e.g. `-f pdf` while pdf_enabled=false).",
 		}, []string{"requested_format"})
+		SinkSeverityDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "writer_sink_severity_dropped_total",
+			Help: "Findings dropped before fan-out because their severity is not in the writer's configured `severities` set.",
+		}, []string{"severity"})
 		SinkFlushSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "writer_sink_flush_seconds",
 			Help:    "Time the accumulator sinks (SARIF/HTML/XLSX/PDF/Parquet) spend rendering + atomically renaming a per-scan file. NDJSON streams and does NOT contribute.",
@@ -89,6 +94,7 @@ func Init() {
 		})
 		for _, c := range []prometheus.Collector{
 			FindingsConsumed, FindingsWriteSeconds, SinkWrites, SinkErrors, SinkFormatIgnored,
+			SinkSeverityDropped,
 			SinkFlushSeconds, SinkFlushTotal, SinkFlushBatchSize, SinkPendingFindings,
 			SinkPostFinalizeDropped,
 			NATSDeliveryErrors, ActiveScans, BuildInfo, OrphanTempfilesSwept,
@@ -104,6 +110,7 @@ func Init() {
 		SinkWrites.WithLabelValues("", "")
 		SinkErrors.WithLabelValues("", "")
 		SinkFormatIgnored.WithLabelValues("")
+		SinkSeverityDropped.WithLabelValues("")
 		SinkFlushSeconds.WithLabelValues("")
 		SinkFlushTotal.WithLabelValues("", "")
 		SinkFlushBatchSize.WithLabelValues("")

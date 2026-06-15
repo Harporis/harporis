@@ -9,6 +9,7 @@ import (
 
 	kitcfg "github.com/Harporis/harporis/kit/config"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	"github.com/Harporis/harporis/contracts/severity"
 )
 
 // Config holds runtime config for the writer.
@@ -34,6 +35,11 @@ type Config struct {
 	PDFEnabled     *bool  `yaml:"pdf_enabled"`
 	ParquetEnabled *bool  `yaml:"parquet_enabled"`
 	SQLiteEnabled  *bool  `yaml:"sqlite_enabled"`
+	// Severities, when non-empty, restricts which finding severities are
+	// written to ANY sink (the gate sits before fan-out, so it affects all
+	// formats uniformly). Empty (default) = no filter, every level written.
+	// Valid level names: LOW, MEDIUM, HIGH, CRITICAL (case-insensitive).
+	Severities []string `yaml:"severities"`
 	// FlushBatch — accumulator sinks (SARIF/HTML/XLSX/PDF/Parquet)
 	// flush after this many NEW findings; <= 1 = sync flush on every
 	// Finding (legacy O(N^2) behaviour).
@@ -74,7 +80,17 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if _, err := cfg.SeveritySet(); err != nil {
+		return nil, fmt.Errorf("severities: %w", err)
+	}
 	return &cfg, nil
+}
+
+// SeveritySet parses the configured severities into a severity.Set.
+// An empty config list yields an empty set ("no filter"). Returns an
+// error if any configured level name is invalid.
+func (c *Config) SeveritySet() (severity.Set, error) {
+	return severity.ParseSet(c.Severities)
 }
 
 func applyDefaults(c *Config) {

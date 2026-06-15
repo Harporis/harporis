@@ -5,6 +5,10 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/contracts/severity"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func TestRenderPrettyFindings_TableShapeAndDecodedSecret(t *testing.T) {
@@ -179,6 +183,37 @@ func TestRenderMarkdown_EmptyFindingsRendersPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "_(no findings)_") {
 		t.Errorf("empty input should render the no-findings placeholder, got %q", buf.String())
+	}
+}
+
+func TestFilterNDJSONBySeverity(t *testing.T) {
+	low, _ := protojson.Marshal(&v1.Finding{ScanId: "s1", Severity: v1.Severity_LOW})
+	crit, _ := protojson.Marshal(&v1.Finding{ScanId: "s1", Severity: v1.Severity_CRITICAL})
+	body := string(low) + "\n" + string(crit) + "\n"
+
+	set, _ := severity.ParseCSV("CRITICAL")
+	out, err := filterNDJSONBySeverity(body, set)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, `"LOW"`) {
+		t.Fatalf("LOW line should be filtered out, got: %q", out)
+	}
+	if !strings.Contains(out, `"CRITICAL"`) {
+		t.Fatalf("CRITICAL line should remain, got: %q", out)
+	}
+}
+
+func TestFilterNDJSONBySeverity_EmptySetPassThrough(t *testing.T) {
+	low, _ := protojson.Marshal(&v1.Finding{ScanId: "s1", Severity: v1.Severity_LOW})
+	body := string(low) + "\n"
+	set, _ := severity.ParseCSV("")
+	out, err := filterNDJSONBySeverity(body, set)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != body {
+		t.Fatalf("empty set should pass body unchanged")
 	}
 }
 
