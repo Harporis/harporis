@@ -126,7 +126,10 @@ func newFindingsShowCmd() *cobra.Command {
 			"  html    self-contained browser report with sort + filter\n" +
 			"  xlsx    Excel workbook (audit/triage in spreadsheets)\n" +
 			"  pdf     printable A4 report (formal hand-off / compliance binder)\n" +
-			"  parquet columnar workbook (SIEM ingestion, DuckDB/Polars/Athena)",
+			"  parquet columnar workbook (SIEM ingestion, DuckDB/Polars/Athena)" +
+			"\nUse --severity CRITICAL,HIGH to keep only those levels (text " +
+			"formats filtered in-process; binary formats regenerated via " +
+			"writer-rebuild, leaving the on-disk report untouched).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanID := args[0]
