@@ -198,6 +198,7 @@ func RunFleetTUI(cl *natscli.Client, natsURL string) error {
 	}()
 
 	_, err = p.Run()
+	cancel() // drain the tail goroutine promptly on any exit path (incl. tea.Quit)
 	return err
 }
 
@@ -210,6 +211,9 @@ func StreamStatusLinesAll(out io.Writer, cl *natscli.Client, jsonOut bool) error
 	}
 	defer cleanup()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Seed snapshot first so a piped consumer sees current state.
 	if seed, err := cl.ListHistory(0, 1*time.Second); err == nil {
 		for _, ev := range seed {
@@ -220,9 +224,6 @@ func StreamStatusLinesAll(out io.Writer, cl *natscli.Client, jsonOut bool) error
 			}
 		}
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	for ctx.Err() == nil {
 		events, err := natscli.FetchStatusEvents(sub, 2*time.Second)
 		if err != nil {
