@@ -261,7 +261,9 @@ func regenProxyWithSeverity(scanID, format, severityCSV, outputDir string) (stri
 		return "", fmt.Errorf("docker compose not available: %w", err)
 	}
 	ext := formatToExt[format]
-	tmpDir := "/tmp/harporis-sevfilter"
+	// Per-invocation temp dir so concurrent `findings show --severity` runs
+	// (even for the same scan_id) don't race on the same regenerated file.
+	tmpDir := fmt.Sprintf("/tmp/harporis-sevfilter-%d-%d", os.Getpid(), time.Now().UnixNano())
 	tmpFile := tmpDir + "/" + scanID + ext
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -290,7 +292,7 @@ func regenProxyWithSeverity(scanID, format, severityCSV, outputDir string) (stri
 	}
 
 	body, readErr := co.Exec(ctx, "writer", "cat", tmpFile)
-	_, _ = co.Exec(ctx, "writer", "rm", "-f", tmpFile)
+	_, _ = co.Exec(ctx, "writer", "rm", "-rf", tmpDir)
 	if readErr != nil {
 		detail := strings.TrimSpace(body)
 		if detail == "" {
