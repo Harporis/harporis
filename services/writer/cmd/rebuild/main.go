@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/contracts/severity"
 	kitscan "github.com/Harporis/harporis/kit/scan"
 	"github.com/Harporis/harporis/services/writer/internal/sink"
 )
@@ -37,15 +39,20 @@ type rebuildSink interface {
 func main() {
 	scanID := flag.String("scan-id", "", "scan_id whose NDJSON to replay (required)")
 	format := flag.String("format", "", "target format: sarif|html|xlsx|pdf|parquet (required)")
+	sevCSV := flag.String("severity", "", "comma-separated severity levels to KEEP (e.g. CRITICAL,HIGH); empty = all")
 	inputDir := flag.String("input-dir", "/var/lib/harporis/findings", "directory holding <scan_id>.ndjson")
 	outputDir := flag.String("output-dir", "", "destination directory; defaults to --input-dir")
 	flag.Parse()
 
 	if *scanID == "" || *format == "" {
-		fail("usage: writer-rebuild --scan-id X --format {sarif|html|xlsx|pdf|parquet} [--input-dir D] [--output-dir D]")
+		fail("usage: writer-rebuild --scan-id X --format {sarif|html|xlsx|pdf|parquet} [--severity LEVELS] [--input-dir D] [--output-dir D]")
 	}
 	if err := kitscan.ValidateScanID(*scanID); err != nil {
 		fail("invalid --scan-id: %v", err)
+	}
+	sevSet, err := severity.ParseCSV(*sevCSV)
+	if err != nil {
+		fail("invalid --severity: %v", err)
 	}
 	if *outputDir == "" {
 		*outputDir = *inputDir
@@ -64,7 +71,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	count, err := replay(ctx, f, out, *scanID)
+	count, err := replay(ctx, f, out, *scanID, sevSet)
 	if err != nil {
 		_ = out.Close()
 		fail("replay: %v", err)
@@ -98,7 +105,7 @@ func buildSink(format, dir string) (rebuildSink, error) {
 	}
 }
 
-func replay(ctx context.Context, r *os.File, out rebuildSink, scanID string) (int, error) {
+func replay(ctx context.Context, r io.Reader, out rebuildSink, scanID string, sevSet severity.Set) (int, error) {
 	sc := bufio.NewScanner(r)
 	// Findings can carry full context windows — bump the scan buffer
 	// well past the default 64 KiB so we don't choke on a wide line.
@@ -116,6 +123,9 @@ func replay(ctx context.Context, r *os.File, out rebuildSink, scanID string) (in
 		}
 		if f.ScanId != scanID {
 			return count, fmt.Errorf("line %d carries scan_id %q, expected %q (mixed file?)", count+1, f.ScanId, scanID)
+		}
+		if !sevSet.Contains(f.Severity) {
+			continue
 		}
 		if err := out.Write(ctx, &f); err != nil {
 			return count, fmt.Errorf("sink write %d: %w", count+1, err)
