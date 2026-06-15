@@ -91,7 +91,10 @@ func (m FleetModel) sorted() []*v1.StatusEvent {
 		if ai != aj {
 			return !ai // active (non-terminal) first
 		}
-		return out[i].Timestamp > out[j].Timestamp
+		if out[i].Timestamp != out[j].Timestamp {
+			return out[i].Timestamp > out[j].Timestamp
+		}
+		return out[i].ScanId < out[j].ScanId // deterministic tiebreak — no flicker
 	})
 	return out
 }
