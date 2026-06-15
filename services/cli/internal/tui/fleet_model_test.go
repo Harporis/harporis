@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
@@ -77,5 +78,20 @@ func TestFleetModelSortAndActiveFilter(t *testing.T) {
 		if e.ScanId == "done-old" {
 			t.Fatalf("terminal scan leaked into activeOnly view")
 		}
+	}
+}
+
+func TestFleetModelHeaderCountsAllScans(t *testing.T) {
+	m := NewFleetModel()
+	send := func(fm FleetModel, id string, st v1.ScanState, ts int64) FleetModel {
+		next, _ := fm.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: id, State: st, Timestamp: ts}})
+		return next.(FleetModel)
+	}
+	m = send(m, "run-a", v1.ScanState_RUNNING, 1)
+	m = send(m, "done-b", v1.ScanState_COMPLETED, 2)
+	m.activeOnly = true
+	out := m.View()
+	if !strings.Contains(out, "1 active / 2 scans") {
+		t.Fatalf("header should show total tracked scans under filter; got:\n%s", out)
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 )
 
+const fleetFooter = "q quit · f filter active"
+
 // fleetTickMsg drives the "x ago" column refresh.
 type fleetTickMsg struct{}
 
@@ -100,12 +102,16 @@ func (m FleetModel) View() string {
 		return ui.BoxStyle.Render("error: " + m.err.Error())
 	}
 	rows := m.sorted()
-	header := fmt.Sprintf("harporis watch — %d scans   %s   %s",
-		len(rows), ui.DimStyle.Render(m.natsURL),
+	countLabel := fmt.Sprintf("%d scans", len(m.scans))
+	if m.activeOnly {
+		countLabel = fmt.Sprintf("%d active / %d scans", len(rows), len(m.scans))
+	}
+	header := fmt.Sprintf("harporis watch — %s   %s   %s",
+		countLabel, ui.DimStyle.Render(m.natsURL),
 		time.Now().UTC().Format("15:04:05"))
 	if len(rows) == 0 {
 		body := ui.DimStyle.Render("(no scans yet, waiting…)")
-		footer := ui.DimStyle.Render("q quit · f filter active")
+		footer := ui.DimStyle.Render(fleetFooter)
 		return ui.BoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
 	}
 	t := ui.NewTable("SCAN_ID", "STATE", "SOURCE", "CHUNKS", "SECRETS", "UPDATED")
@@ -123,7 +129,7 @@ func (m FleetModel) View() string {
 	var sb strings.Builder
 	sb.WriteString(header + "\n")
 	_, _ = t.WriteTo(&sb)
-	sb.WriteString(ui.DimStyle.Render("q quit · f filter active"))
+	sb.WriteString(ui.DimStyle.Render(fleetFooter))
 	return ui.BoxStyle.Render(sb.String())
 }
 
