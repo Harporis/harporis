@@ -61,7 +61,10 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, fleetTick()
 	case StatusEventMsg:
 		ev := v.Ev
-		if prev, ok := m.scans[ev.ScanId]; !ok || ev.Timestamp >= prev.Timestamp {
+		prev, ok := m.scans[ev.ScanId]
+		if !ok {
+			m.scans[ev.ScanId] = ev
+		} else if !(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
 			m.scans[ev.ScanId] = ev
 		}
 		return m, nil

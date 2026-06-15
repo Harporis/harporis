@@ -34,6 +34,20 @@ func TestFleetModelOlderTimestampIgnored(t *testing.T) {
 	}
 }
 
+func TestFleetModelTerminalStateSticky(t *testing.T) {
+	m := NewFleetModel()
+	// COMPLETED at ts=10, then RUNNING at ts=20 (newer timestamp).
+	// The later RUNNING must NOT overwrite terminal COMPLETED.
+	m2, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "x", State: v1.ScanState_COMPLETED, Timestamp: 10}})
+	fm := m2.(FleetModel)
+	m3, _ := fm.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "x", State: v1.ScanState_RUNNING, Timestamp: 20}})
+	fm = m3.(FleetModel)
+
+	if fm.Scans()["x"].State != v1.ScanState_COMPLETED {
+		t.Fatalf("terminal state must be sticky: got %v, want COMPLETED", fm.Scans()["x"].State)
+	}
+}
+
 func TestFleetModelSortAndActiveFilter(t *testing.T) {
 	m := NewFleetModel()
 	send := func(fm FleetModel, id string, st v1.ScanState, ts int64) FleetModel {

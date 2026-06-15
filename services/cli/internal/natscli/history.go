@@ -46,7 +46,9 @@ func (c *Client) ListHistory(maxScans int, wait time.Duration) ([]*v1.StatusEven
 				continue
 			}
 			prev, ok := latest[ev.ScanId]
-			if !ok || ev.Timestamp >= prev.Timestamp {
+			if !ok {
+				latest[ev.ScanId] = &ev
+			} else if !(isTerminalState(prev.State) && !isTerminalState(ev.State)) && ev.Timestamp >= prev.Timestamp {
 				latest[ev.ScanId] = &ev
 			}
 		}
@@ -63,6 +65,15 @@ func (c *Client) ListHistory(maxScans int, wait time.Duration) ([]*v1.StatusEven
 		out = out[:maxScans]
 	}
 	return out, nil
+}
+
+// isTerminalState reports whether a scan state cannot transition further.
+func isTerminalState(s v1.ScanState) bool {
+	switch s {
+	case v1.ScanState_COMPLETED, v1.ScanState_FAILED, v1.ScanState_PARTIAL, v1.ScanState_CANCELLED:
+		return true
+	}
+	return false
 }
 
 // ShowHistory returns every status event for a single scan, oldest-first.

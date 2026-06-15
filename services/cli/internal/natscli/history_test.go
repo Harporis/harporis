@@ -61,6 +61,45 @@ func TestListHistoryLastEventPerScan(t *testing.T) {
 	}
 }
 
+func TestListHistoryTerminalStateSticky(t *testing.T) {
+	srv := runJetstream(t)
+	cl, err := Dial(srv.ClientURL(), "history-sticky-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.EnsureStreams(); err != nil {
+		t.Fatal(err)
+	}
+
+	pub := func(id string, state v1.ScanState, ts int64) {
+		data, _ := proto.Marshal(&v1.StatusEvent{
+			ScanId: id, State: state, Timestamp: ts,
+		})
+		_, err := cl.JS.Publish(wire.StatusSubject(id), data,
+			nats.MsgId(fmt.Sprintf("%s:%s:%d", id, state.String(), ts)))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Publish COMPLETED first (ts=10), then a later RUNNING tick (ts=20).
+	// The late RUNNING must NOT overwrite the terminal COMPLETED.
+	pub("x", v1.ScanState_COMPLETED, 10)
+	pub("x", v1.ScanState_RUNNING, 20)
+
+	got, err := cl.ListHistory(5, 1*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 scan, got %d: %+v", len(got), got)
+	}
+	if got[0].State != v1.ScanState_COMPLETED {
+		t.Errorf("terminal state must be sticky: got %s, want COMPLETED", got[0].State)
+	}
+}
+
 func TestShowHistoryReturnsOrdered(t *testing.T) {
 	srv := runJetstream(t)
 	cl, err := Dial(srv.ClientURL(), "history-show-test")
