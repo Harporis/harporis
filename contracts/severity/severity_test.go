@@ -57,3 +57,18 @@ func TestParseSet_RejectsUnspecified(t *testing.T) {
 		t.Fatalf("SEVERITY_UNSPECIFIED is not a selectable level")
 	}
 }
+
+func TestParseSet_NilAndEmpty_IsNoFilter(t *testing.T) {
+	for _, input := range [][]string{nil, {}} {
+		set, err := ParseSet(input)
+		if err != nil {
+			t.Fatalf("unexpected error for input %v: %v", input, err)
+		}
+		if len(set) != 0 {
+			t.Fatalf("expected empty no-filter set for input %v, got %d", input, len(set))
+		}
+		if !set.Contains(v1.Severity_LOW) {
+			t.Fatalf("empty set should pass all levels for input %v", input)
+		}
+	}
+}
