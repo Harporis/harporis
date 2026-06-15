@@ -1,11 +1,36 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
+
+func TestFleetModelBoundsMemoryAndKeepsActive(t *testing.T) {
+	m := NewFleetModel()
+	send := func(fm FleetModel, id string, st v1.ScanState, ts int64) FleetModel {
+		next, _ := fm.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: id, State: st, Timestamp: ts}})
+		return next.(FleetModel)
+	}
+	// One active scan we expect to survive eviction.
+	m = send(m, "live", v1.ScanState_RUNNING, 0)
+	// Flood with terminal scans well past the cap.
+	for i := 0; i < maxFleetScans+300; i++ {
+		m = send(m, fmt.Sprintf("done-%05d", i), v1.ScanState_COMPLETED, int64(i+1))
+	}
+	if got := len(m.Scans()); got > maxFleetScans {
+		t.Fatalf("map not bounded: got %d, want <= %d", got, maxFleetScans)
+	}
+	if _, ok := m.Scans()["live"]; !ok {
+		t.Fatalf("active scan was evicted; active scans must be retained over terminal ones")
+	}
+	// Oldest terminal scans should be the ones evicted, newest retained.
+	if _, ok := m.Scans()["done-00000"]; ok {
+		t.Fatalf("oldest terminal scan should have been evicted first")
+	}
+}
 
 func TestFleetModelFoldsLatestPerScan(t *testing.T) {
 	m := NewFleetModel()

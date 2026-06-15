@@ -15,6 +15,12 @@ import (
 
 const fleetFooter = "q quit · f filter active"
 
+// maxFleetScans bounds the in-memory scan map so a long-lived `harporis
+// watch` session on a busy fleet cannot grow without limit. Community
+// edition value; the DB-backed Pro/Enterprise dashboards page from a store
+// instead of holding everything in memory.
+const maxFleetScans = 1000
+
 // fleetTickMsg drives the "x ago" column refresh.
 type fleetTickMsg struct{}
 
@@ -66,6 +72,7 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prev, ok := m.scans[ev.ScanId]
 		if !ok {
 			m.scans[ev.ScanId] = ev
+			m.evictIfOver() // only a new scan_id can grow the map
 		} else if !(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
 			m.scans[ev.ScanId] = ev
 		}
@@ -75,6 +82,37 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// evictIfOver keeps the scan map bounded at maxFleetScans. It removes the
+// single most-evictable entry: the oldest finished (terminal) scan, falling
+// back to the oldest active one only if every tracked scan is still active.
+// Active scans are retained preferentially since they are what the operator
+// is watching. Called after a new scan_id is inserted, so at most one entry
+// is over the cap.
+func (m FleetModel) evictIfOver() {
+	if len(m.scans) <= maxFleetScans {
+		return
+	}
+	var victim string
+	var victimTS int64
+	var victimTerminal bool
+	first := true
+	for id, ev := range m.scans {
+		term := IsTerminal(ev.State)
+		replace := first
+		if !first {
+			if term != victimTerminal {
+				replace = term && !victimTerminal // prefer evicting terminal
+			} else {
+				replace = ev.Timestamp < victimTS // same kind: evict oldest
+			}
+		}
+		if replace {
+			victim, victimTS, victimTerminal, first = id, ev.Timestamp, term, false
+		}
+	}
+	delete(m.scans, victim)
 }
 
 // sorted returns scans ordered active-first, then by most-recent update.
