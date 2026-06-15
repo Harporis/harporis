@@ -16,7 +16,10 @@ import (
 	"unicode"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 
+	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/contracts/severity"
 	kitscan "github.com/Harporis/harporis/kit/scan"
 	"github.com/Harporis/harporis/services/cli/internal/compose"
 )
@@ -106,6 +109,7 @@ func newFindingsShowCmd() *cobra.Command {
 	var outputDir string
 	var pretty bool
 	var format string
+	var severityCSV string
 	c := &cobra.Command{
 		Use:   "show <scan_id>",
 		Short: "print findings for a scan in the requested format",
@@ -139,6 +143,11 @@ func newFindingsShowCmd() *cobra.Command {
 				return fmt.Errorf("unknown --format %q (want one of: %s)", format, strings.Join(supportedFormats, ", "))
 			}
 
+			sevSet, err := severity.ParseCSV(severityCSV)
+			if err != nil {
+				return err
+			}
+
 			ext := ".ndjson"
 			if v, ok := formatToExt[format]; ok {
 				ext = v
@@ -146,6 +155,14 @@ func newFindingsShowCmd() *cobra.Command {
 			body, err := readFindingsFile(scanID, ext, outputDir)
 			if err != nil {
 				return err
+			}
+
+			// Text formats derive from NDJSON; filter in-process.
+			if _, isProxy := formatToExt[format]; !isProxy {
+				body, err = filterNDJSONBySeverity(body, sevSet)
+				if err != nil {
+					return err
+				}
 			}
 
 			switch format {
@@ -176,7 +193,41 @@ func newFindingsShowCmd() *cobra.Command {
 	c.Flags().StringVar(&outputDir, "output-dir", "", "read findings files from a host path instead of `docker compose exec writer cat`")
 	c.Flags().BoolVar(&pretty, "pretty", false, "(deprecated) shorthand for --format pretty")
 	c.Flags().StringVarP(&format, "format", "f", "ndjson", "output format: "+strings.Join(supportedFormats, "|"))
+	c.Flags().StringVar(&severityCSV, "severity", "", "comma-separated severity levels to KEEP (e.g. CRITICAL,HIGH); empty = all")
 	return c
+}
+
+// filterNDJSONBySeverity keeps only NDJSON lines whose Finding.severity is
+// in set. An empty set returns body unchanged (no filter). Used for the
+// text-rendered formats (ndjson/pretty/json/csv/md) which all derive from
+// the on-disk NDJSON.
+func filterNDJSONBySeverity(body string, set severity.Set) (string, error) {
+	if len(set) == 0 {
+		return body, nil
+	}
+	var b strings.Builder
+	sc := bufio.NewScanner(strings.NewReader(body))
+	sc.Buffer(make([]byte, 0, 256*1024), 16*1024*1024)
+	um := protojson.UnmarshalOptions{DiscardUnknown: true}
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var f v1.Finding
+		if err := um.Unmarshal(line, &f); err != nil {
+			return "", fmt.Errorf("decode ndjson line: %w", err)
+		}
+		if !set.Contains(f.Severity) {
+			continue
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("read ndjson: %w", err)
+	}
+	return b.String(), nil
 }
 
 // readFindingsFile returns the contents of <output_dir>/<scan_id><ext>
