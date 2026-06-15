@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kitscan "github.com/Harporis/harporis/kit/scan"
 	"github.com/Harporis/harporis/services/cli/internal/compose"
 )
 
@@ -51,8 +52,8 @@ func newFindingsRebuildCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanID := args[0]
-			if !validScanID(scanID) {
-				return fmt.Errorf("invalid scan_id %q (use UUID-ish chars only)", scanID)
+			if err := kitscan.ValidateScanID(scanID); err != nil {
+				return err
 			}
 			if !slices.Contains(rebuildFormats, format) {
 				return fmt.Errorf("unknown --format %q (want one of: %s)", format, strings.Join(rebuildFormats, ", "))
@@ -125,8 +126,8 @@ func newFindingsShowCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanID := args[0]
-			if !validScanID(scanID) {
-				return fmt.Errorf("invalid scan_id %q (use UUID-ish chars only)", scanID)
+			if err := kitscan.ValidateScanID(scanID); err != nil {
+				return err
 			}
 			// --pretty is the deprecated single-purpose form; it loses
 			// to an explicit --format. Keeping it avoids breaking
@@ -549,28 +550,4 @@ func stripControl(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
-}
-
-// validScanID mirrors getter's ValidateScanID alphabet exactly
-// ([A-Za-z0-9_-], length ≤128) so the CLI rejects any scan_id the
-// server would. Period is NOT allowed even though `cat` via docker
-// compose exec uses argv (not a shell) — keeping the validator
-// synchronized prevents user confusion when CLI accepts a string the
-// rest of the pipeline rejects.
-func validScanID(s string) bool {
-	if s == "" || len(s) > 128 {
-		return false
-	}
-	for _, r := range s {
-		switch {
-		case r >= 'A' && r <= 'Z',
-			r >= 'a' && r <= 'z',
-			r >= '0' && r <= '9',
-			r == '-', r == '_':
-			continue
-		default:
-			return false
-		}
-	}
-	return true
 }

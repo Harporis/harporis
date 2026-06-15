@@ -182,6 +182,7 @@ type StatusEvent struct {
 	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	Metrics       *ScanMetrics           `protobuf:"bytes,5,opt,name=metrics,proto3" json:"metrics,omitempty"`
 	OutputConfig  *OutputConfig          `protobuf:"bytes,6,opt,name=output_config,json=outputConfig,proto3" json:"output_config,omitempty"`
+	Source        string                 `protobuf:"bytes,7,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -258,6 +259,13 @@ func (x *StatusEvent) GetOutputConfig() *OutputConfig {
 	return nil
 }
 
+func (x *StatusEvent) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
 type CancelScanRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ScanId        string                 `protobuf:"bytes,1,opt,name=scan_id,json=scanId,proto3" json:"scan_id,omitempty"`
@@ -323,14 +331,15 @@ const file_harporis_v1_events_proto_rawDesc = "" +
 	"\ferrors_total\x18\x05 \x01(\x03R\verrorsTotal\x12\x1f\n" +
 	"\vduration_ms\x18\x06 \x01(\x03R\n" +
 	"durationMs\x12#\n" +
-	"\rsecrets_found\x18\a \x01(\x03R\fsecretsFound\"\x80\x02\n" +
+	"\rsecrets_found\x18\a \x01(\x03R\fsecretsFound\"\x98\x02\n" +
 	"\vStatusEvent\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12,\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x16.harporis.v1.ScanStateR\x05state\x12\x1c\n" +
 	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12\x18\n" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x122\n" +
 	"\ametrics\x18\x05 \x01(\v2\x18.harporis.v1.ScanMetricsR\ametrics\x12>\n" +
-	"\routput_config\x18\x06 \x01(\v2\x19.harporis.v1.OutputConfigR\foutputConfig\"D\n" +
+	"\routput_config\x18\x06 \x01(\v2\x19.harporis.v1.OutputConfigR\foutputConfig\x12\x16\n" +
+	"\x06source\x18\a \x01(\tR\x06source\"D\n" +
 	"\x11CancelScanRequest\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason*x\n" +

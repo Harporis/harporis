@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/contracts/scanstate"
 	"github.com/Harporis/harporis/kit/nats/wire"
 )
 
@@ -46,7 +47,9 @@ func (c *Client) ListHistory(maxScans int, wait time.Duration) ([]*v1.StatusEven
 				continue
 			}
 			prev, ok := latest[ev.ScanId]
-			if !ok || ev.Timestamp >= prev.Timestamp {
+			if !ok {
+				latest[ev.ScanId] = &ev
+			} else if !(scanstate.IsTerminal(prev.State) && !scanstate.IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
 				latest[ev.ScanId] = &ev
 			}
 		}

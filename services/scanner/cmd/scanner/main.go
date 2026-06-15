@@ -88,7 +88,11 @@ func main() {
 		fatal("ensure streams: %v", err)
 	}
 
-	pub := scannernats.NewPublisher(cl.JS, time.Duration(cfg.PublishAckWaitSeconds)*time.Second)
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "unknown"
+	}
+	pub := scannernats.NewPublisher(cl.JS, time.Duration(cfg.PublishAckWaitSeconds)*time.Second, "scanner-"+host)
 
 	// Status tracker.
 	tracker := status.NewTracker(pub, time.Duration(cfg.StatusTickMs)*time.Millisecond)

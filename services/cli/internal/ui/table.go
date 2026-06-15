@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Table is a minimal column writer. We don't use lipgloss tables — these
@@ -27,16 +29,18 @@ func (t *Table) Row(cols ...string) {
 	t.rows = append(t.rows, row)
 }
 
-// WriteTo renders the table.
+// WriteTo renders the table. Column widths are measured with
+// lipgloss.Width so that ANSI-styled cells (e.g. a colored STATE column)
+// align by their VISIBLE width, not their byte length.
 func (t *Table) WriteTo(w io.Writer) (int64, error) {
 	widths := make([]int, len(t.headers))
 	for i, h := range t.headers {
-		widths[i] = len(h)
+		widths[i] = lipgloss.Width(h)
 	}
 	for _, r := range t.rows {
 		for i, c := range r {
-			if len(c) > widths[i] {
-				widths[i] = len(c)
+			if cw := lipgloss.Width(c); cw > widths[i] {
+				widths[i] = cw
 			}
 		}
 	}
@@ -61,9 +65,12 @@ func (t *Table) WriteTo(w io.Writer) (int64, error) {
 	return int64(n), err
 }
 
+// padRight pads s with trailing spaces to a VISIBLE width of n, ignoring
+// any ANSI escape sequences embedded in s.
 func padRight(s string, n int) string {
-	if len(s) >= n {
+	w := lipgloss.Width(s)
+	if w >= n {
 		return s
 	}
-	return s + strings.Repeat(" ", n-len(s))
+	return s + strings.Repeat(" ", n-w)
 }

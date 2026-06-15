@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/services/cli/internal/natscli"
@@ -22,11 +25,10 @@ import (
 func newWatchCmd() *cobra.Command {
 	var idle time.Duration
 	c := &cobra.Command{
-		Use:   "watch <scan-id>",
-		Short: "follow status events for a scan",
-		Args:  cobra.ExactArgs(1),
+		Use:   "watch [scan-id]",
+		Short: "follow status — one scan, or the whole fleet when no id is given",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			scanID := args[0]
 			natsURL, _ := cmd.Root().PersistentFlags().GetString("nats")
 			jsonOut, _ := cmd.Root().PersistentFlags().GetBool("json")
 			cl, err := natscli.Dial(natsURL, "harporis-cli-watch")
@@ -37,14 +39,44 @@ func newWatchCmd() *cobra.Command {
 			if err := cl.EnsureStreams(); err != nil {
 				return fmt.Errorf("ensure streams: %w", err)
 			}
+			// Fleet mode: no scan-id.
+			if len(args) == 0 {
+				if cmd.Flags().Changed("timeout") {
+					fmt.Fprintln(os.Stderr, "note: --timeout is ignored in fleet mode (no scan-id); the dashboard runs until you quit")
+				}
+				if !jsonOut && isatty.IsTerminal(os.Stdout.Fd()) {
+					return RunFleetTUI(cl, natsURL)
+				}
+				return StreamStatusLinesAll(cmd.OutOrStdout(), cl, jsonOut)
+			}
+			// Single-scan mode (unchanged behaviour).
+			scanID := args[0]
 			if !jsonOut && isatty.IsTerminal(os.Stdout.Fd()) {
 				return RunWatchTUI(cl, scanID, idle)
 			}
 			return StreamStatusLines(cmd.OutOrStdout(), cl, scanID, idle)
 		},
 	}
-	c.Flags().DurationVar(&idle, "timeout", 30*time.Minute, "give up if no status events arrive for this long")
+	c.Flags().DurationVar(&idle, "timeout", 30*time.Minute, "give up if no status events arrive for this long (single-scan mode)")
 	return c
+}
+
+// writeStatusJSON emits one compact protojson-encoded StatusEvent per line.
+// protojson injects randomized insignificant whitespace, so we run the
+// output through json.Compact to get a stable, space-free single line.
+func writeStatusJSON(out io.Writer, ev *v1.StatusEvent) {
+	raw, err := protojson.Marshal(ev)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skip status event %q: marshal: %v\n", ev.GetScanId(), err)
+		return
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		fmt.Fprintf(os.Stderr, "skip status event %q: compact: %v\n", ev.GetScanId(), err)
+		return
+	}
+	buf.WriteByte('\n')
+	_, _ = out.Write(buf.Bytes())
 }
 
 // RunWatchTUI runs the bubble tea watch panel until terminal state or
@@ -133,6 +165,83 @@ func terminalExitCode(s v1.ScanState) error {
 	switch s {
 	case v1.ScanState_FAILED, v1.ScanState_CANCELLED:
 		return &exitError{code: 3, msg: s.String()}
+	}
+	return nil
+}
+
+// RunFleetTUI runs the live multi-scan dashboard until ctrl+c. It seeds
+// the table from ListHistory then tails the wildcard status stream.
+func RunFleetTUI(cl *natscli.Client, natsURL string) error {
+	sub, cleanup, err := cl.SubscribeStatusAll()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	p := tea.NewProgram(tui.NewFleetModel().WithNATSURL(natsURL), tea.WithAltScreen())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	go func() {
+		// Seed snapshot (newest state per scan), then tail live. Both run
+		// in this goroutine: p.Send must run concurrently with p.Run()
+		// consuming messages — sending before Run() starts would deadlock.
+		if seed, err := cl.ListHistory(0, 1*time.Second); err == nil {
+			for _, ev := range seed {
+				p.Send(tui.StatusEventMsg{Ev: ev})
+			}
+		}
+		for ctx.Err() == nil {
+			events, err := natscli.FetchStatusEvents(sub, 2*time.Second)
+			if err != nil {
+				p.Send(tui.SubscribeErrMsg{Err: err})
+				return
+			}
+			for _, ev := range events {
+				p.Send(tui.StatusEventMsg{Ev: ev})
+			}
+		}
+	}()
+
+	_, err = p.Run()
+	cancel() // drain the tail goroutine promptly on any exit path (incl. tea.Quit)
+	return err
+}
+
+// StreamStatusLinesAll tails every scan's status and prints one line (or
+// one protojson object) per event. Runs until ctrl+c. No idle timeout.
+func StreamStatusLinesAll(out io.Writer, cl *natscli.Client, jsonOut bool) error {
+	sub, cleanup, err := cl.SubscribeStatusAll()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Seed snapshot first so a piped consumer sees current state.
+	if seed, err := cl.ListHistory(0, 1*time.Second); err == nil {
+		for _, ev := range seed {
+			if jsonOut {
+				writeStatusJSON(out, ev)
+			} else {
+				ui.PrintStatusLine(out, ev)
+			}
+		}
+	}
+	for ctx.Err() == nil {
+		events, err := natscli.FetchStatusEvents(sub, 2*time.Second)
+		if err != nil {
+			return fmt.Errorf("watch-all fetch: %w", err)
+		}
+		for _, ev := range events {
+			if jsonOut {
+				writeStatusJSON(out, ev)
+			} else {
+				ui.PrintStatusLine(out, ev)
+			}
+		}
 	}
 	return nil
 }

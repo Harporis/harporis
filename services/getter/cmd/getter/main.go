@@ -65,7 +65,11 @@ func main() {
 	if err := wire.EnsureStreams(cl.JS); err != nil {
 		fatal("nats streams: %v", err)
 	}
-	publisher := getnats.NewPublisher(cl.JS, cfg.NATS.JetStream.PublishAckWaitSeconds)
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "unknown"
+	}
+	publisher := getnats.NewPublisher(cl.JS, cfg.NATS.JetStream.PublishAckWaitSeconds, "getter-"+host)
 
 	registry := scan.NewRegistry()
 	dispatch := buildDispatcher(cfg, publisher, registry)

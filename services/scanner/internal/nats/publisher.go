@@ -19,10 +19,23 @@ import (
 type Publisher struct {
 	js          natsclient.JetStreamContext
 	publishWait time.Duration
+	source      string
 }
 
-func NewPublisher(js natsclient.JetStreamContext, publishWait time.Duration) *Publisher {
-	return &Publisher{js: js, publishWait: publishWait}
+func NewPublisher(js natsclient.JetStreamContext, publishWait time.Duration, source string) *Publisher {
+	return &Publisher{js: js, publishWait: publishWait, source: source}
+}
+
+// buildSecretsFoundEvent constructs the RUNNING status event carrying the
+// running secrets_found counter, stamped with this replica's source.
+func (p *Publisher) buildSecretsFoundEvent(scanID string, count int64) *v1.StatusEvent {
+	return &v1.StatusEvent{
+		ScanId:    scanID,
+		State:     v1.ScanState_RUNNING,
+		Timestamp: time.Now().Unix(),
+		Metrics:   &v1.ScanMetrics{SecretsFound: count},
+		Source:    p.source,
+	}
 }
 
 // PublishFinding emits one Finding to harporis.findings.<scan_id> with a
@@ -51,12 +64,7 @@ func (p *Publisher) PublishFinding(ctx context.Context, f *v1.Finding) error {
 // PublishStatusSecretsFound emits a StatusEvent with only metrics.secrets_found
 // populated. The status emitter calls this on a tick.
 func (p *Publisher) PublishStatusSecretsFound(ctx context.Context, scanID string, count int64) error {
-	ev := &v1.StatusEvent{
-		ScanId:    scanID,
-		State:     v1.ScanState_RUNNING,
-		Timestamp: time.Now().Unix(),
-		Metrics:   &v1.ScanMetrics{SecretsFound: count},
-	}
+	ev := p.buildSecretsFoundEvent(scanID, count)
 	body, err := proto.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("marshal status: %w", err)

@@ -15,11 +15,15 @@ import (
 type Publisher struct {
 	js      nats.JetStreamContext
 	ackWait time.Duration
+	source  string
 }
 
-func NewPublisher(js nats.JetStreamContext, ackWaitSeconds int) *Publisher {
-	return &Publisher{js: js, ackWait: time.Duration(ackWaitSeconds) * time.Second}
+func NewPublisher(js nats.JetStreamContext, ackWaitSeconds int, source string) *Publisher {
+	return &Publisher{js: js, ackWait: time.Duration(ackWaitSeconds) * time.Second, source: source}
 }
+
+// stampSource sets the replica identity on an outgoing status event.
+func (p *Publisher) stampSource(ev *v1.StatusEvent) { ev.Source = p.source }
 
 func (p *Publisher) PublishChunk(ctx context.Context, c *v1.GitRowChunk) error {
 	data, err := proto.Marshal(c)
@@ -32,6 +36,7 @@ func (p *Publisher) PublishChunk(ctx context.Context, c *v1.GitRowChunk) error {
 }
 
 func (p *Publisher) PublishStatus(ctx context.Context, ev *v1.StatusEvent) error {
+	p.stampSource(ev)
 	data, err := proto.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("marshal status: %w", err)
