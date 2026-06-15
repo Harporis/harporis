@@ -15,8 +15,8 @@ mutates over time. The simple edition stays forever light.
 
 | Edition | Audience | Adds over previous | Stores |
 |---|---|---|---|
-| **Community** (Lite) | CI/CD, self-host, 1→100 replicas | — (the core) | none (NATS only) |
-| **Pro** (Scale + FP) | larger deployments, FP triage at volume | persistent stores, false-positive lifecycle, analytics | Postgres + ClickHouse |
+| **Community** (Lite) | CI/CD, self-host on a single machine | — (the core) | none (NATS only) |
+| **Pro** (Scale + FP) | k8s multi-node, FP triage at volume | Helm/k8s deploy, persistent stores, false-positive lifecycle, analytics | Postgres + ClickHouse |
 | **Enterprise** (Platform) | full service | web UI, dashboards, RBAC roles, AI FP-classifier | + API server |
 
 ### Architectural backbone
@@ -39,8 +39,8 @@ Today, sinks are already *consumers* of the NATS streams (`FINDINGS`,
 
 - Core build stays `CGO_ENABLED=0` (pure-Go); heavy deps live only in
   optional modules.
-- One-command launch preserved at every layer (compose for dev, Helm for
-  k8s).
+- One-command launch preserved: Community = `scripts/install.sh` +
+  docker-compose (single machine); Pro = Helm chart (k8s).
 - Each service scales independently (10 getters / 5 scanners / 5 writers).
 - Optional modules are opt-in via flags/profiles; absent module = zero
   cost to the core.
@@ -54,7 +54,9 @@ build order; cross-edition dependencies are called out in §3.
 
 ### Edition: Community (Lite) — harden the core to production
 
-Goal: forever-light, NATS-only, 1 replica in CI to 100 in k8s, one command.
+Goal: forever-light, NATS-only, **single-machine** deployment via the
+`scripts/install.sh` one-shot installer + docker-compose (which can scale
+replicas locally with `--scale`). No Helm/Kubernetes — that is a Pro feature.
 
 - **P0.1 — `harporis watch` fleet view + source attribution.**
   Live cross-scan dashboard reading the wildcard `STATUS` stream; add a
@@ -69,9 +71,8 @@ Goal: forever-light, NATS-only, 1 replica in CI to 100 in k8s, one command.
 - **P0.3 — Regex pack consolidation.**
   Consolidate the ~28-rule pack to cut per-chunk CPU; measured against the
   benchmark baseline at commit `9785898`. Serves the "fast" goal.
-- **P0.4 — Helm chart v1 (Community).**
-  Stateless services + NATS; per-service HPA. Extends "one command" from
-  docker-compose to Kubernetes.
+(No Helm/k8s phase here — Community is single-machine Docker only. Helm
+moves to Pro, see P1.4.)
 
 ### Edition: Pro (Scale + FP) — persistence & false-positive lifecycle
 
@@ -89,8 +90,10 @@ false-positive (FP) lifecycle.
 - **P1.3 — ClickHouse store (findings consumer).**
   High-volume analytics/aggregation (e.g. severity trends over time) at
   100-replica scale where OLTP Postgres is the wrong tool.
-- **P1.4 — Helm: optional Postgres + ClickHouse subcharts.**
-  Installed only for Pro; the core still runs without them.
+- **P1.4 — Helm chart for Kubernetes (the Pro deploy path).**
+  Stateless services + NATS with per-service HPA, plus optional Postgres +
+  ClickHouse subcharts. This is where multi-node 1→100-replica k8s scaling
+  lives; Community stays single-machine Docker.
 
 ### Edition: Enterprise (Platform) — UI, roles, AI
 
@@ -117,7 +120,8 @@ Goal: a full service.
    / UI bind to an unstable proto and churn.
 2. **P1.2 (FP labeling) before P2.4 (AI).** The classifier needs labeled
    data; the FP lifecycle produces it.
-3. **Helm grows in layers** (P0.4 → P1.4 → P2.5), never rewritten.
+3. **Helm is Pro-and-up** (P1.4 → P2.5), never in Community. Community ships
+   single-machine Docker (install script + compose) only.
 
 **Cross-cutting threads** running through all phases: secret-handling
 security, observability (Prometheus metrics already exist), and
