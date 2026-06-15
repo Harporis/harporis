@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/contracts/scanstate"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 )
 
@@ -132,15 +133,9 @@ func (m WatchModel) View() string {
 func (m WatchModel) ExitCode() int { return m.exitCode }
 
 // IsTerminal reports whether the scan state cannot transition further.
-// Exported so cmd packages can avoid re-defining the same switch.
-func IsTerminal(s v1.ScanState) bool {
-	switch s {
-	case v1.ScanState_COMPLETED, v1.ScanState_FAILED,
-		v1.ScanState_CANCELLED, v1.ScanState_PARTIAL:
-		return true
-	}
-	return false
-}
+// Exported so cmd packages can avoid re-defining the same switch; delegates
+// to the shared contracts/scanstate classifier.
+func IsTerminal(s v1.ScanState) bool { return scanstate.IsTerminal(s) }
 
 func appendCap[T any](xs []T, x T, cap int) []T {
 	xs = append(xs, x)
