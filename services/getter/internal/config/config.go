@@ -75,4 +75,11 @@ type ConsumerConfig struct {
 	QueueGroup            string `yaml:"queue_group"`
 	RequestAckWaitSeconds int    `yaml:"request_ack_wait_seconds"`
 	MaxInFlightScans      int    `yaml:"max_in_flight_scans"`
+	// MaxDeliver caps redeliveries of a failing scan request so a
+	// permanently-failing scan (bad SSH key, unreachable repo) stops
+	// instead of retrying forever.
+	MaxDeliver int `yaml:"max_deliver"`
+	// NakBackoffSeconds spaces out redeliveries so a fast-failing scan
+	// doesn't spin in a tight loop (which can exhaust fork()).
+	NakBackoffSeconds int `yaml:"nak_backoff_seconds"`
 }

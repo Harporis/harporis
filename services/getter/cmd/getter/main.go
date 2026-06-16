@@ -78,6 +78,8 @@ func main() {
 		getnats.RequestSubscribeOptions{
 			AckWaitSeconds:   cfg.NATS.Consumer.RequestAckWaitSeconds,
 			MaxInFlightScans: cfg.NATS.Consumer.MaxInFlightScans,
+			MaxDeliver:       cfg.NATS.Consumer.MaxDeliver,
+			NakBackoff:       time.Duration(cfg.NATS.Consumer.NakBackoffSeconds) * time.Second,
 		}, dispatch)
 	if err != nil {
 		fatal("subscribe requests: %v", err)

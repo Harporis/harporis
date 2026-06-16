@@ -56,5 +56,11 @@ func Validate(c *Config) error {
 	if c.NATS.Consumer.MaxInFlightScans < 1 {
 		errs = append(errs, fmt.Errorf("nats.consumer.max_in_flight_scans: must be >= 1 (got %d)", c.NATS.Consumer.MaxInFlightScans))
 	}
+	if c.NATS.Consumer.MaxDeliver < 1 {
+		errs = append(errs, fmt.Errorf("nats.consumer.max_deliver: must be >= 1 (got %d)", c.NATS.Consumer.MaxDeliver))
+	}
+	if c.NATS.Consumer.NakBackoffSeconds < 0 {
+		errs = append(errs, fmt.Errorf("nats.consumer.nak_backoff_seconds: must be >= 0 (got %d)", c.NATS.Consumer.NakBackoffSeconds))
+	}
 	return errors.Join(errs...)
 }

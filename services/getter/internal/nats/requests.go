@@ -17,6 +17,14 @@ type RequestHandler func(ctx context.Context, req *v1.ScanRequest) error
 type RequestSubscribeOptions struct {
 	AckWaitSeconds   int
 	MaxInFlightScans int
+	// MaxDeliver caps how many times a failing request is redelivered.
+	// 0 = unlimited (legacy behaviour — a permanently failing scan
+	// retries forever). >0 lets JetStream stop after that many attempts.
+	MaxDeliver int
+	// NakBackoff is the delay before a failed request is redelivered.
+	// 0 = immediate (legacy — a fast-failing handler produces a tight
+	// redelivery loop). >0 spaces retries out.
+	NakBackoff time.Duration
 }
 
 // heartbeatInterval returns how often we send msg.InProgress() while a
@@ -34,11 +42,25 @@ func SubscribeRequests(ctx context.Context, js nats.JetStreamContext, opts Reque
 	ackWait := time.Duration(opts.AckWaitSeconds) * time.Second
 	heartbeat := heartbeatInterval(ackWait)
 
+	subOpts := []nats.SubOpt{
+		nats.Durable(wire.GetterPoolQueueGroup),
+		nats.ManualAck(),
+		nats.AckWait(ackWait),
+		nats.MaxAckPending(opts.MaxInFlightScans),
+	}
+	// Cap redeliveries so a permanently failing scan (bad SSH key,
+	// unreachable repo) eventually stops instead of retrying forever.
+	if opts.MaxDeliver > 0 {
+		subOpts = append(subOpts, nats.MaxDeliver(opts.MaxDeliver))
+	}
+
 	return js.QueueSubscribe(wire.ScansRequestsSubject, wire.GetterPoolQueueGroup, func(msg *nats.Msg) {
 		var req v1.ScanRequest
 		if err := proto.Unmarshal(msg.Data, &req); err != nil {
-			slog.Error("unmarshal ScanRequest", "err", err)
-			_ = msg.Nak()
+			// Poison message — it will never decode, so terminate it
+			// instead of redelivering in a loop.
+			slog.Error("unmarshal ScanRequest — terminating poison message", "err", err)
+			_ = msg.Term()
 			return
 		}
 
@@ -77,14 +99,15 @@ func SubscribeRequests(ctx context.Context, js nats.JetStreamContext, opts Reque
 
 		if err != nil {
 			slog.Error("scan request handler", "scan_id", req.ScanId, "err", err)
-			_ = msg.Nak()
+			// Back off before redelivery so a fast-failing scan doesn't
+			// spin in a tight microsecond loop (which can exhaust fork()).
+			if opts.NakBackoff > 0 {
+				_ = msg.NakWithDelay(opts.NakBackoff)
+			} else {
+				_ = msg.Nak()
+			}
 			return
 		}
 		_ = msg.Ack()
-	},
-		nats.Durable(wire.GetterPoolQueueGroup),
-		nats.ManualAck(),
-		nats.AckWait(ackWait),
-		nats.MaxAckPending(opts.MaxInFlightScans),
-	)
+	}, subOpts...)
 }
