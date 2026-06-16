@@ -41,6 +41,7 @@ var rebuildFormats = []string{"sarif", "html", "xlsx", "pdf", "parquet"}
 
 func newFindingsRebuildCmd() *cobra.Command {
 	var format string
+	var severityCSV string
 	c := &cobra.Command{
 		Use:   "rebuild <scan_id>",
 		Short: "reconstruct a stale sink file from the scan's NDJSON",
@@ -51,7 +52,10 @@ func newFindingsRebuildCmd() *cobra.Command {
 			"Runs via `docker compose exec writer writer-rebuild`, so the rebuilt file " +
 			"lands inside the writer container's /var/lib/harporis/findings — the same " +
 			"mount the live writer uses.\n\n" +
-			"Supported --format values: " + strings.Join(rebuildFormats, ", ") + ".",
+			"Supported --format values: " + strings.Join(rebuildFormats, ", ") + ".\n\n" +
+			"--severity CRITICAL,HIGH rebuilds a filtered report IN PLACE — unlike " +
+			"`findings show --severity` (which leaves the on-disk file untouched), this " +
+			"overwrites the canonical <scan_id>.<ext> with only the listed levels.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanID := args[0]
@@ -60,6 +64,9 @@ func newFindingsRebuildCmd() *cobra.Command {
 			}
 			if !slices.Contains(rebuildFormats, format) {
 				return fmt.Errorf("unknown --format %q (want one of: %s)", format, strings.Join(rebuildFormats, ", "))
+			}
+			if _, err := severity.ParseCSV(severityCSV); err != nil {
+				return err
 			}
 			co, err := compose.NewDefault()
 			if err != nil {
@@ -71,6 +78,7 @@ func newFindingsRebuildCmd() *cobra.Command {
 				"/usr/local/bin/writer-rebuild",
 				"--scan-id", scanID,
 				"--format", format,
+				"--severity", severityCSV,
 			)
 			if body != "" {
 				_, _ = cmd.OutOrStdout().Write([]byte(body))
@@ -85,6 +93,7 @@ func newFindingsRebuildCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVarP(&format, "format", "f", "", "target format: "+strings.Join(rebuildFormats, "|")+" (required)")
+	c.Flags().StringVar(&severityCSV, "severity", "", "comma-separated severity levels to KEEP (e.g. CRITICAL,HIGH); empty = all. Overwrites the canonical file in place.")
 	_ = c.MarkFlagRequired("format")
 	return c
 }
