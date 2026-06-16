@@ -39,19 +39,28 @@ RUN apk add --no-cache git ca-certificates openssh-client && \
     addgroup -S harporis && \
     adduser -S -G harporis -h /home/harporis harporis && \
     mkdir -p /var/lib/harporis/scans && \
-    chown -R harporis:harporis /var/lib/harporis /home/harporis
+    chown -R harporis:harporis /var/lib/harporis /home/harporis && \
+    # Mounted host repos often have a UID that doesn't match the runtime
+    # user, so git refuses to operate on them ("dubious ownership").
+    # Whitelist all paths in the SYSTEM gitconfig (/etc/gitconfig) so it
+    # applies to whatever UID compose injects — a per-user --global config
+    # in /home/harporis wouldn't be read by an arbitrary host UID. The
+    # getter only READS repos, never modifies them.
+    git config --system --add safe.directory '*' && \
+    # The compose file runs this container as an arbitrary host UID (so the
+    # read-only $HOME bind-mount is traversable). That UID has no passwd
+    # entry, which breaks OpenSSH ("No user exists for uid N") on ssh://
+    # clones. World-writable /etc/passwd lets the entrypoint synthesize an
+    # entry for whatever UID is injected at runtime.
+    chmod 0666 /etc/passwd
 
 COPY --from=build /out/getter /usr/local/bin/getter
 COPY services/getter/config /etc/harporis
+COPY services/getter/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 USER harporis
 WORKDIR /home/harporis
-
-# Mounted host repos often have a UID that doesn't match the `harporis`
-# user inside the container, so git refuses to operate on them ("dubious
-# ownership"). Whitelisting all paths is acceptable here: the getter only
-# READS the repo, never modifies it.
-RUN git config --global --add safe.directory '*'
 
 # gRPC + Prometheus metrics
 EXPOSE 50051 9100
@@ -60,5 +69,7 @@ EXPOSE 50051 9100
 ENV NATS_URL=nats://nats:4222 \
     WORK_DIR=/var/lib/harporis/scans
 
-ENTRYPOINT ["/usr/local/bin/getter"]
+# entrypoint.sh synthesizes a passwd entry for the runtime UID (for SSH),
+# then exec's getter with the CMD args.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["--config", "/etc/harporis/getter.yaml", "--metrics-port", "9100"]
