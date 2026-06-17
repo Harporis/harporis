@@ -28,6 +28,7 @@ func validBaseConfig() *Config {
 			Consumer: ConsumerConfig{
 				RequestsSubject: "x", CancelSubject: "y",
 				QueueGroup: "g", RequestAckWaitSeconds: 60, MaxInFlightScans: 4,
+				MaxDeliver: 5, NakBackoffSeconds: 5,
 			},
 		},
 	}
@@ -57,6 +58,8 @@ func TestValidate_Errors(t *testing.T) {
 		{"low ack wait", func(c *Config) { c.NATS.Consumer.RequestAckWaitSeconds = 0 }, "request_ack_wait_seconds"},
 		{"low publish ack wait", func(c *Config) { c.NATS.JetStream.PublishAckWaitSeconds = 0 }, "publish_ack_wait_seconds"},
 		{"low max in flight", func(c *Config) { c.NATS.Consumer.MaxInFlightScans = 0 }, "max_in_flight_scans"},
+		{"low max deliver", func(c *Config) { c.NATS.Consumer.MaxDeliver = 0 }, "max_deliver"},
+		{"negative nak backoff", func(c *Config) { c.NATS.Consumer.NakBackoffSeconds = -1 }, "nak_backoff_seconds"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

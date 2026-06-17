@@ -101,6 +101,8 @@ nats:
     queue_group:      getter-pool
     request_ack_wait_seconds: 60
     max_in_flight_scans: 4
+    max_deliver: 5              # cap redeliveries of a failing scan (bad SSH key, unreachable repo) — stops infinite retry storms
+    nak_backoff_seconds: 5      # delay between redeliveries so a fast-failing scan doesn't tight-loop and exhaust fork()
 
 allow_request_overrides:
   - chunking.max_file_size_mb
