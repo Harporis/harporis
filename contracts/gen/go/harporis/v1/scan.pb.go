@@ -205,6 +205,112 @@ func (x *SshAuth) GetKnownHosts() string {
 	return ""
 }
 
+type BasicAuth struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BasicAuth) Reset() {
+	*x = BasicAuth{}
+	mi := &file_harporis_v1_scan_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BasicAuth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BasicAuth) ProtoMessage() {}
+
+func (x *BasicAuth) ProtoReflect() protoreflect.Message {
+	mi := &file_harporis_v1_scan_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BasicAuth.ProtoReflect.Descriptor instead.
+func (*BasicAuth) Descriptor() ([]byte, []int) {
+	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *BasicAuth) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *BasicAuth) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+// HeaderAuth carries one HTTP request header, e.g.
+// {name:"Authorization", value:"Bearer <jwt>"} or {name:"PRIVATE-TOKEN", value:"<t>"}.
+type HeaderAuth struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HeaderAuth) Reset() {
+	*x = HeaderAuth{}
+	mi := &file_harporis_v1_scan_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeaderAuth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeaderAuth) ProtoMessage() {}
+
+func (x *HeaderAuth) ProtoReflect() protoreflect.Message {
+	mi := &file_harporis_v1_scan_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeaderAuth.ProtoReflect.Descriptor instead.
+func (*HeaderAuth) Descriptor() ([]byte, []int) {
+	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *HeaderAuth) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *HeaderAuth) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
 type RemoteRepo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Url   string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
@@ -212,6 +318,8 @@ type RemoteRepo struct {
 	//
 	//	*RemoteRepo_Token
 	//	*RemoteRepo_Ssh
+	//	*RemoteRepo_Basic
+	//	*RemoteRepo_Header
 	Auth          isRemoteRepo_Auth `protobuf_oneof:"auth"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -219,7 +327,7 @@ type RemoteRepo struct {
 
 func (x *RemoteRepo) Reset() {
 	*x = RemoteRepo{}
-	mi := &file_harporis_v1_scan_proto_msgTypes[2]
+	mi := &file_harporis_v1_scan_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -231,7 +339,7 @@ func (x *RemoteRepo) String() string {
 func (*RemoteRepo) ProtoMessage() {}
 
 func (x *RemoteRepo) ProtoReflect() protoreflect.Message {
-	mi := &file_harporis_v1_scan_proto_msgTypes[2]
+	mi := &file_harporis_v1_scan_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -244,7 +352,7 @@ func (x *RemoteRepo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteRepo.ProtoReflect.Descriptor instead.
 func (*RemoteRepo) Descriptor() ([]byte, []int) {
-	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{2}
+	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RemoteRepo) GetUrl() string {
@@ -279,21 +387,51 @@ func (x *RemoteRepo) GetSsh() *SshAuth {
 	return nil
 }
 
+func (x *RemoteRepo) GetBasic() *BasicAuth {
+	if x != nil {
+		if x, ok := x.Auth.(*RemoteRepo_Basic); ok {
+			return x.Basic
+		}
+	}
+	return nil
+}
+
+func (x *RemoteRepo) GetHeader() *HeaderAuth {
+	if x != nil {
+		if x, ok := x.Auth.(*RemoteRepo_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
 type isRemoteRepo_Auth interface {
 	isRemoteRepo_Auth()
 }
 
 type RemoteRepo_Token struct {
-	Token string `protobuf:"bytes,2,opt,name=token,proto3,oneof"`
+	Token string `protobuf:"bytes,2,opt,name=token,proto3,oneof"` // PAT-style: x-access-token:<token> (back-compat)
 }
 
 type RemoteRepo_Ssh struct {
 	Ssh *SshAuth `protobuf:"bytes,3,opt,name=ssh,proto3,oneof"`
 }
 
+type RemoteRepo_Basic struct {
+	Basic *BasicAuth `protobuf:"bytes,4,opt,name=basic,proto3,oneof"` // HTTPS Basic (login+password)
+}
+
+type RemoteRepo_Header struct {
+	Header *HeaderAuth `protobuf:"bytes,5,opt,name=header,proto3,oneof"` // arbitrary HTTP auth header
+}
+
 func (*RemoteRepo_Token) isRemoteRepo_Auth() {}
 
 func (*RemoteRepo_Ssh) isRemoteRepo_Auth() {}
+
+func (*RemoteRepo_Basic) isRemoteRepo_Auth() {}
+
+func (*RemoteRepo_Header) isRemoteRepo_Auth() {}
 
 type Source struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -308,7 +446,7 @@ type Source struct {
 
 func (x *Source) Reset() {
 	*x = Source{}
-	mi := &file_harporis_v1_scan_proto_msgTypes[3]
+	mi := &file_harporis_v1_scan_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -320,7 +458,7 @@ func (x *Source) String() string {
 func (*Source) ProtoMessage() {}
 
 func (x *Source) ProtoReflect() protoreflect.Message {
-	mi := &file_harporis_v1_scan_proto_msgTypes[3]
+	mi := &file_harporis_v1_scan_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -333,7 +471,7 @@ func (x *Source) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Source.ProtoReflect.Descriptor instead.
 func (*Source) Descriptor() ([]byte, []int) {
-	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{3}
+	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Source) GetSrc() isSource_Src {
@@ -398,7 +536,7 @@ type OutputConfig struct {
 
 func (x *OutputConfig) Reset() {
 	*x = OutputConfig{}
-	mi := &file_harporis_v1_scan_proto_msgTypes[4]
+	mi := &file_harporis_v1_scan_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -410,7 +548,7 @@ func (x *OutputConfig) String() string {
 func (*OutputConfig) ProtoMessage() {}
 
 func (x *OutputConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_harporis_v1_scan_proto_msgTypes[4]
+	mi := &file_harporis_v1_scan_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -423,7 +561,7 @@ func (x *OutputConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OutputConfig.ProtoReflect.Descriptor instead.
 func (*OutputConfig) Descriptor() ([]byte, []int) {
-	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{4}
+	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *OutputConfig) GetKind() string {
@@ -465,7 +603,7 @@ type ConfigOverride struct {
 
 func (x *ConfigOverride) Reset() {
 	*x = ConfigOverride{}
-	mi := &file_harporis_v1_scan_proto_msgTypes[5]
+	mi := &file_harporis_v1_scan_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -477,7 +615,7 @@ func (x *ConfigOverride) String() string {
 func (*ConfigOverride) ProtoMessage() {}
 
 func (x *ConfigOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_harporis_v1_scan_proto_msgTypes[5]
+	mi := &file_harporis_v1_scan_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -490,7 +628,7 @@ func (x *ConfigOverride) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigOverride.ProtoReflect.Descriptor instead.
 func (*ConfigOverride) Descriptor() ([]byte, []int) {
-	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{5}
+	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ConfigOverride) GetMaxFileSizeMb() int32 {
@@ -528,7 +666,7 @@ type ScanRequest struct {
 
 func (x *ScanRequest) Reset() {
 	*x = ScanRequest{}
-	mi := &file_harporis_v1_scan_proto_msgTypes[6]
+	mi := &file_harporis_v1_scan_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -540,7 +678,7 @@ func (x *ScanRequest) String() string {
 func (*ScanRequest) ProtoMessage() {}
 
 func (x *ScanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_harporis_v1_scan_proto_msgTypes[6]
+	mi := &file_harporis_v1_scan_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -553,7 +691,7 @@ func (x *ScanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScanRequest.ProtoReflect.Descriptor instead.
 func (*ScanRequest) Descriptor() ([]byte, []int) {
-	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{6}
+	return file_harporis_v1_scan_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ScanRequest) GetScanId() string {
@@ -613,12 +751,21 @@ const file_harporis_v1_scan_proto_rawDesc = "" +
 	"\aSshAuth\x12&\n" +
 	"\x0fprivate_key_pem\x18\x01 \x01(\tR\rprivateKeyPem\x12\x1f\n" +
 	"\vknown_hosts\x18\x02 \x01(\tR\n" +
-	"knownHosts\"h\n" +
+	"knownHosts\"C\n" +
+	"\tBasicAuth\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\"6\n" +
+	"\n" +
+	"HeaderAuth\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\xcb\x01\n" +
 	"\n" +
 	"RemoteRepo\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
 	"\x05token\x18\x02 \x01(\tH\x00R\x05token\x12(\n" +
-	"\x03ssh\x18\x03 \x01(\v2\x14.harporis.v1.SshAuthH\x00R\x03sshB\x06\n" +
+	"\x03ssh\x18\x03 \x01(\v2\x14.harporis.v1.SshAuthH\x00R\x03ssh\x12.\n" +
+	"\x05basic\x18\x04 \x01(\v2\x16.harporis.v1.BasicAuthH\x00R\x05basic\x121\n" +
+	"\x06header\x18\x05 \x01(\v2\x17.harporis.v1.HeaderAuthH\x00R\x06headerB\x06\n" +
 	"\x04auth\"c\n" +
 	"\x06Source\x12\x1f\n" +
 	"\n" +
@@ -669,32 +816,36 @@ func file_harporis_v1_scan_proto_rawDescGZIP() []byte {
 }
 
 var file_harporis_v1_scan_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_harporis_v1_scan_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_harporis_v1_scan_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_harporis_v1_scan_proto_goTypes = []any{
 	(ScanType)(0),          // 0: harporis.v1.ScanType
 	(*ScanRange)(nil),      // 1: harporis.v1.ScanRange
 	(*SshAuth)(nil),        // 2: harporis.v1.SshAuth
-	(*RemoteRepo)(nil),     // 3: harporis.v1.RemoteRepo
-	(*Source)(nil),         // 4: harporis.v1.Source
-	(*OutputConfig)(nil),   // 5: harporis.v1.OutputConfig
-	(*ConfigOverride)(nil), // 6: harporis.v1.ConfigOverride
-	(*ScanRequest)(nil),    // 7: harporis.v1.ScanRequest
-	nil,                    // 8: harporis.v1.OutputConfig.ParamsEntry
+	(*BasicAuth)(nil),      // 3: harporis.v1.BasicAuth
+	(*HeaderAuth)(nil),     // 4: harporis.v1.HeaderAuth
+	(*RemoteRepo)(nil),     // 5: harporis.v1.RemoteRepo
+	(*Source)(nil),         // 6: harporis.v1.Source
+	(*OutputConfig)(nil),   // 7: harporis.v1.OutputConfig
+	(*ConfigOverride)(nil), // 8: harporis.v1.ConfigOverride
+	(*ScanRequest)(nil),    // 9: harporis.v1.ScanRequest
+	nil,                    // 10: harporis.v1.OutputConfig.ParamsEntry
 }
 var file_harporis_v1_scan_proto_depIdxs = []int32{
-	2, // 0: harporis.v1.RemoteRepo.ssh:type_name -> harporis.v1.SshAuth
-	3, // 1: harporis.v1.Source.remote:type_name -> harporis.v1.RemoteRepo
-	8, // 2: harporis.v1.OutputConfig.params:type_name -> harporis.v1.OutputConfig.ParamsEntry
-	4, // 3: harporis.v1.ScanRequest.source:type_name -> harporis.v1.Source
-	0, // 4: harporis.v1.ScanRequest.type:type_name -> harporis.v1.ScanType
-	1, // 5: harporis.v1.ScanRequest.range:type_name -> harporis.v1.ScanRange
-	6, // 6: harporis.v1.ScanRequest.overrides:type_name -> harporis.v1.ConfigOverride
-	5, // 7: harporis.v1.ScanRequest.output:type_name -> harporis.v1.OutputConfig
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	2,  // 0: harporis.v1.RemoteRepo.ssh:type_name -> harporis.v1.SshAuth
+	3,  // 1: harporis.v1.RemoteRepo.basic:type_name -> harporis.v1.BasicAuth
+	4,  // 2: harporis.v1.RemoteRepo.header:type_name -> harporis.v1.HeaderAuth
+	5,  // 3: harporis.v1.Source.remote:type_name -> harporis.v1.RemoteRepo
+	10, // 4: harporis.v1.OutputConfig.params:type_name -> harporis.v1.OutputConfig.ParamsEntry
+	6,  // 5: harporis.v1.ScanRequest.source:type_name -> harporis.v1.Source
+	0,  // 6: harporis.v1.ScanRequest.type:type_name -> harporis.v1.ScanType
+	1,  // 7: harporis.v1.ScanRequest.range:type_name -> harporis.v1.ScanRange
+	8,  // 8: harporis.v1.ScanRequest.overrides:type_name -> harporis.v1.ConfigOverride
+	7,  // 9: harporis.v1.ScanRequest.output:type_name -> harporis.v1.OutputConfig
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_harporis_v1_scan_proto_init() }
@@ -702,11 +853,13 @@ func file_harporis_v1_scan_proto_init() {
 	if File_harporis_v1_scan_proto != nil {
 		return
 	}
-	file_harporis_v1_scan_proto_msgTypes[2].OneofWrappers = []any{
+	file_harporis_v1_scan_proto_msgTypes[4].OneofWrappers = []any{
 		(*RemoteRepo_Token)(nil),
 		(*RemoteRepo_Ssh)(nil),
+		(*RemoteRepo_Basic)(nil),
+		(*RemoteRepo_Header)(nil),
 	}
-	file_harporis_v1_scan_proto_msgTypes[3].OneofWrappers = []any{
+	file_harporis_v1_scan_proto_msgTypes[5].OneofWrappers = []any{
 		(*Source_LocalPath)(nil),
 		(*Source_Remote)(nil),
 	}
@@ -716,7 +869,7 @@ func file_harporis_v1_scan_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_harporis_v1_scan_proto_rawDesc), len(file_harporis_v1_scan_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
