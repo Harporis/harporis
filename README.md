@@ -113,7 +113,7 @@ grows up to its rolling 7d/512MiB window.)
 - Getter operator guide: [`services/getter/QUICKSTART.md`](services/getter/QUICKSTART.md)
 - Scanner details: [`services/scanner/README.md`](services/scanner/README.md)
 - Writer details: [`services/writer/README.md`](services/writer/README.md)
-- Project status + roadmap: [`PROJECT_STATUS.md`](PROJECT_STATUS.md)
+- Deploy from published images: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 
 ## Repo layout
 

@@ -1,0 +1,109 @@
+# Self-contained deploy from PUBLISHED images (GitHub Container Registry).
+# No source checkout, no build — just this one file.
+#
+#   curl -O https://raw.githubusercontent.com/Harporis/harporis/main/docker-compose.ghcr.yml
+#   docker compose -f docker-compose.ghcr.yml up -d
+#
+# Everything comes up with a default dev token. To harden / configure,
+# drop a `.env` beside this file (see docs/DEPLOYMENT.md):
+#
+#   NATS_TOKEN=$(openssl rand -hex 24)     # rotate the auth token
+#   HARPORIS_VERSION=writer-v0.5.0         # pin a release instead of :latest
+#   HARPORIS_FINDINGS_DIR=/srv/harporis    # where reports land on the host
+#   HARPORIS_SQLITE_ENABLED=true           # opt into the cross-scan SQLite sink
+#
+# Horizontal scaling — same as the dev stack:
+#   docker compose -f docker-compose.ghcr.yml up -d --scale scanner=4 --scale getter=2
+#
+# For NATS TLS + JWT (production hardening) layer the prod overlay on top;
+# docs/DEPLOYMENT.md walks through generating the certs/creds.
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: harporis-nats
+    # Inline JetStream + token auth so this file needs no mounted config.
+    command: ["-js", "-sd", "/data", "--auth", "${NATS_TOKEN:-harporis-dev}"]
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring + /healthz
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz | grep -q '\"status\":\"ok\"'"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  getter:
+    image: ghcr.io/harporis/harporis-getter:${HARPORIS_VERSION:-latest}
+    depends_on:
+      nats:
+        condition: service_healthy
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      WORK_DIR: /var/lib/harporis/scans
+    expose:
+      - "9100"
+      - "50051"
+    tmpfs:
+      - /var/lib/harporis/scans:mode=1777
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9100"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+  scanner:
+    image: ghcr.io/harporis/harporis-scanner:${HARPORIS_VERSION:-latest}
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      HARPORIS_FINDINGS_SHARDS: "${HARPORIS_FINDINGS_SHARDS:-1}"
+    expose:
+      - "9101"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9101"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+  writer:
+    image: ghcr.io/harporis/harporis-writer:${HARPORIS_VERSION:-latest}
+    depends_on:
+      nats:
+        condition: service_healthy
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: "${NATS_TOKEN:-harporis-dev}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      HARPORIS_FINDINGS_SHARDS: "${HARPORIS_FINDINGS_SHARDS:-1}"
+      HARPORIS_SQLITE_ENABLED: "${HARPORIS_SQLITE_ENABLED:-false}"
+    expose:
+      - "9102"
+    volumes:
+      - "${HARPORIS_FINDINGS_DIR:-./findings}:/var/lib/harporis/findings"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9102"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+volumes:
+  nats-data:
