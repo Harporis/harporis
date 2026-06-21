@@ -191,7 +191,20 @@ func scanTypeFromString(s string) (v1.ScanType, bool) {
 	return 0, false
 }
 
-func buildSource(local, remoteURL, token, sshKey, knownHosts string) (*v1.Source, error) {
+// remoteAuth groups the per-scan HTTPS/SSH credential flags. At most one
+// HTTPS method (Token | User+Password | Bearer | Header) may be set; SSH
+// is mutually exclusive with all of them.
+type remoteAuth struct {
+	Token      string
+	User       string
+	Password   string
+	Bearer     string
+	Header     string // raw "Name: Value"
+	SSHKey     string
+	KnownHosts string
+}
+
+func buildSource(local, remoteURL string, a remoteAuth) (*v1.Source, error) {
 	if local != "" {
 		if remoteURL != "" {
 			return nil, errors.New("--local and --remote-url are mutually exclusive")
@@ -202,21 +215,45 @@ func buildSource(local, remoteURL, token, sshKey, knownHosts string) (*v1.Source
 		return nil, errors.New("either --local or --remote-url is required")
 	}
 	rr := &v1.RemoteRepo{Url: remoteURL}
+
+	// Count chosen methods so >1 is a clear error rather than silent win.
+	chosen := 0
+	for _, set := range []bool{a.Token != "", a.User != "" || a.Password != "", a.Bearer != "", a.Header != "", a.SSHKey != ""} {
+		if set {
+			chosen++
+		}
+	}
+	if chosen > 1 {
+		return nil, errors.New("pick exactly one remote auth method: --remote-token | --remote-user/--remote-password | --remote-bearer | --remote-header | --remote-ssh-key")
+	}
+
 	switch {
-	case token != "" && sshKey != "":
-		return nil, errors.New("--remote-token and --remote-ssh-key are mutually exclusive")
-	case token != "":
-		rr.Auth = &v1.RemoteRepo_Token{Token: token}
-	case sshKey != "":
-		key, err := os.ReadFile(sshKey)
+	case a.Token != "":
+		rr.Auth = &v1.RemoteRepo_Token{Token: a.Token}
+	case a.User != "" || a.Password != "":
+		if a.User == "" || a.Password == "" {
+			return nil, errors.New("--remote-user and --remote-password must be set together")
+		}
+		rr.Auth = &v1.RemoteRepo_Basic{Basic: &v1.BasicAuth{Username: a.User, Password: a.Password}}
+	case a.Bearer != "":
+		rr.Auth = &v1.RemoteRepo_Header{Header: &v1.HeaderAuth{Name: "Authorization", Value: "Bearer " + a.Bearer}}
+	case a.Header != "":
+		name, value, ok := strings.Cut(a.Header, ":")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if !ok || name == "" || value == "" {
+			return nil, fmt.Errorf("--remote-header %q must be 'Name: Value'", a.Header)
+		}
+		rr.Auth = &v1.RemoteRepo_Header{Header: &v1.HeaderAuth{Name: name, Value: value}}
+	case a.SSHKey != "":
+		key, err := os.ReadFile(a.SSHKey)
 		if err != nil {
-			return nil, fmt.Errorf("read ssh key %s: %w", sshKey, err)
+			return nil, fmt.Errorf("read ssh key %s: %w", a.SSHKey, err)
 		}
 		ssh := &v1.SshAuth{PrivateKeyPem: string(key)}
-		if knownHosts != "" {
-			kh, err := os.ReadFile(knownHosts)
+		if a.KnownHosts != "" {
+			kh, err := os.ReadFile(a.KnownHosts)
 			if err != nil {
-				return nil, fmt.Errorf("read known_hosts %s: %w", knownHosts, err)
+				return nil, fmt.Errorf("read known_hosts %s: %w", a.KnownHosts, err)
 			}
 			ssh.KnownHosts = string(kh)
 		}
