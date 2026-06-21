@@ -11,6 +11,61 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+func TestResolveFindingsName(t *testing.T) {
+	const scan = "3258dee2-475c-417a-a3c7-917b98e205c1"
+	cases := []struct {
+		name  string
+		names []string
+		ext   string
+		want  string
+	}{
+		{
+			name:  "exact bare name (single-pool mode)",
+			names: []string{scan + ".ndjson", scan + ".pdf"},
+			ext:   ".pdf",
+			want:  scan + ".pdf",
+		},
+		{
+			name:  "replica-suffixed name (HARPORIS_FINDINGS_SHARDS=1)",
+			names: []string{scan + ".ndjson", scan + ".3bad9a0183a5.pdf"},
+			ext:   ".pdf",
+			want:  scan + ".3bad9a0183a5.pdf",
+		},
+		{
+			name:  "bare preferred over suffixed when both present",
+			names: []string{scan + ".pdf", scan + ".3bad9a0183a5.pdf"},
+			ext:   ".pdf",
+			want:  scan + ".pdf",
+		},
+		{
+			name:  "ignores tempfiles and other extensions",
+			names: []string{scan + ".sarif", scan + ".sarif.tmp-99", scan + ".ndjson"},
+			ext:   ".sarif",
+			want:  scan + ".sarif",
+		},
+		{
+			name:  "no match returns empty",
+			names: []string{scan + ".ndjson", scan + ".sarif"},
+			ext:   ".pdf",
+			want:  "",
+		},
+		{
+			name:  "does not match a different scan that shares no prefix",
+			names: []string{"other-scan.pdf"},
+			ext:   ".pdf",
+			want:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveFindingsName(tc.names, scan, tc.ext)
+			if got != tc.want {
+				t.Errorf("resolveFindingsName(%v, %q, %q) = %q, want %q", tc.names, scan, tc.ext, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRenderPrettyFindings_TableShapeAndDecodedSecret(t *testing.T) {
 	// Two findings: one with file_path + matched_secret (base64-encoded
 	// "AKIAIOSFODNN7EXAMPLE"); one with empty file_path but Refs.
