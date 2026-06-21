@@ -50,6 +50,8 @@ func TestValidate_DefaultAuth(t *testing.T) {
 		{"no method", []HostAuth{{Host: "github.com"}}, true},
 		{"two methods", []HostAuth{{Host: "github.com", Token: "x", Header: &HeaderAuthCfg{Name: "A", Value: "b"}}}, true},
 		{"header missing name", []HostAuth{{Host: "github.com", Header: &HeaderAuthCfg{Value: "b"}}}, true},
+		{"basic missing password", []HostAuth{{Host: "github.com", Basic: &BasicAuthCfg{User: "u"}}}, true},
+		{"valid basic entry", []HostAuth{{Host: "github.com", Basic: &BasicAuthCfg{User: "u", Password: "p"}}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

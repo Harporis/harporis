@@ -23,10 +23,13 @@ type LocalSource struct {
 //
 // Supported auth modes:
 //   - HTTPS, no auth — public clone (URL https://… with no Token/BasicUser).
-//   - HTTPS + Bearer token — set Token. Sent via -c http.extraHeader, never
-//     embedded in the URL or shown in argv.
-//   - HTTPS + Basic auth — set BasicUser + BasicPassword. base64(user:pass)
-//     is sent via http.extraHeader. Raw credentials never appear in argv.
+//   - HTTPS + Bearer token — set Token. Password delivered via GIT_ASKPASS
+//     (env HARPORIS_GIT_AUTH); never embedded in the URL or shown in argv.
+//   - HTTPS + Basic auth — set BasicUser + BasicPassword. Password delivered
+//     via GIT_ASKPASS (env HARPORIS_GIT_AUTH). Raw credentials never appear
+//     in argv.
+//   - HTTPS + Header auth — set Header.Name/Value. The header value is passed
+//     via GIT_CONFIG_* env vars (http.extraHeader), which is argv-safe.
 //   - SSH + private key — set SSHPrivateKeyPEM. The key is written to a 0600
 //     tempfile and referenced via GIT_SSH_COMMAND -i. IdentitiesOnly=yes
 //     prevents the ssh-agent from being tried alongside the explicit key.
