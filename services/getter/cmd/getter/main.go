@@ -235,6 +235,14 @@ func sourceFromProto(s *v1.Source) (git.Source, error) {
 		out.SSHPrivateKeyPEM = []byte(ssh.PrivateKeyPem)
 		out.SSHKnownHosts = []byte(ssh.KnownHosts)
 	}
+	if b := rem.GetBasic(); b != nil {
+		out.BasicUser = b.GetUsername()
+		out.BasicPassword = b.GetPassword()
+	}
+	if h := rem.GetHeader(); h != nil {
+		out.Header.Name = h.GetName()
+		out.Header.Value = h.GetValue()
+	}
 	return out, nil
 }
 
