@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildSourceLocal(t *testing.T) {
-	s, err := buildSource("/repos/demo", "", "", "", "")
+	s, err := buildSource("/repos/demo", "", remoteAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,13 +20,13 @@ func TestBuildSourceLocal(t *testing.T) {
 }
 
 func TestBuildSourceMutualExclusion(t *testing.T) {
-	if _, err := buildSource("/x", "https://y", "", "", ""); err == nil {
+	if _, err := buildSource("/x", "https://y", remoteAuth{}); err == nil {
 		t.Fatal("expected error on local + remote")
 	}
 }
 
 func TestBuildSourceRemoteToken(t *testing.T) {
-	s, err := buildSource("", "https://github.com/x/y.git", "ghp_xxx", "", "")
+	s, err := buildSource("", "https://github.com/x/y.git", remoteAuth{Token: "ghp_xxx"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,12 +41,57 @@ func TestBuildSourceRemoteSSH(t *testing.T) {
 	if err := os.WriteFile(key, []byte("PEM-DATA"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, err := buildSource("", "git@github.com:x/y.git", "", key, "")
+	s, err := buildSource("", "git@github.com:x/y.git", remoteAuth{SSHKey: key})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(s.GetRemote().GetSsh().GetPrivateKeyPem(), "PEM-DATA") {
 		t.Fatal("ssh key not loaded")
+	}
+}
+
+func TestBuildSource_BasicAuth(t *testing.T) {
+	src, err := buildSource("", "https://x/r.git", remoteAuth{User: "alice", Password: "pw"})
+	if err != nil {
+		t.Fatalf("buildSource: %v", err)
+	}
+	b := src.GetRemote().GetBasic()
+	if b == nil || b.Username != "alice" || b.Password != "pw" {
+		t.Fatalf("basic not built: %+v", src.GetRemote())
+	}
+}
+
+func TestBuildSource_BearerBuildsAuthorizationHeader(t *testing.T) {
+	src, err := buildSource("", "https://x/r.git", remoteAuth{Bearer: "jwt123"})
+	if err != nil {
+		t.Fatalf("buildSource: %v", err)
+	}
+	h := src.GetRemote().GetHeader()
+	if h == nil || h.Name != "Authorization" || h.Value != "Bearer jwt123" {
+		t.Fatalf("bearer header wrong: %+v", h)
+	}
+}
+
+func TestBuildSource_HeaderParsesNameColonValue(t *testing.T) {
+	src, err := buildSource("", "https://x/r.git", remoteAuth{Header: "PRIVATE-TOKEN: abc"})
+	if err != nil {
+		t.Fatalf("buildSource: %v", err)
+	}
+	h := src.GetRemote().GetHeader()
+	if h == nil || h.Name != "PRIVATE-TOKEN" || h.Value != "abc" {
+		t.Fatalf("header parse wrong: %+v", h)
+	}
+}
+
+func TestBuildSource_HeaderWithoutColonErrors(t *testing.T) {
+	if _, err := buildSource("", "https://x/r.git", remoteAuth{Header: "no-colon"}); err == nil {
+		t.Fatal("expected error for malformed --remote-header")
+	}
+}
+
+func TestBuildSource_MultipleMethodsError(t *testing.T) {
+	if _, err := buildSource("", "https://x/r.git", remoteAuth{Token: "t", Bearer: "b"}); err == nil {
+		t.Fatal("expected error for >1 auth method")
 	}
 }
 

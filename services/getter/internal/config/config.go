@@ -39,6 +39,27 @@ type GitConfig struct {
 	CloneTimeout         time.Duration `yaml:"-"`
 	CloneTimeoutSeconds  int           `yaml:"clone_timeout_seconds"`
 	CatFileBatchBufferKB int           `yaml:"cat_file_batch_buffer_kb"`
+	DefaultAuth          []HostAuth    `yaml:"default_auth"`
+}
+
+// HostAuth is a per-host credential default, applied to any scan of a
+// matching host that carries no per-scan auth. Exactly one of
+// Token/Basic/Header must be set. Secrets should use ${VAR}.
+type HostAuth struct {
+	Host   string         `yaml:"host"`
+	Token  string         `yaml:"token"`
+	Basic  *BasicAuthCfg  `yaml:"basic"`
+	Header *HeaderAuthCfg `yaml:"header"`
+}
+
+type BasicAuthCfg struct {
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+}
+
+type HeaderAuthCfg struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
 }
 
 type ChunkingConfig struct {

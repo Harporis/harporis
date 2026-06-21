@@ -37,6 +37,8 @@ func newScanCmd() *cobra.Command {
 	var (
 		scanID, scanType, local, remoteURL       string
 		token, sshKey, knownHosts                string
+		remoteUser, remotePassword               string
+		remoteBearer, remoteHeader               string
 		branch, baseBranch, commitFrom, commitTo string
 		formats                                  []string
 		contextLines                             int32
@@ -80,7 +82,23 @@ func newScanCmd() *cobra.Command {
 			if translated != local {
 				fmt.Fprintf(cmd.OutOrStdout(), "mounted host path: %s → %s (read-only via getter:/host)\n", local, translated)
 			}
-			src, err := buildSource(translated, remoteURL, token, sshKey, knownHosts)
+			if remotePassword == "" {
+				remotePassword = os.Getenv("HARPORIS_REMOTE_PASSWORD")
+			}
+			if remoteBearer == "" {
+				remoteBearer = os.Getenv("HARPORIS_REMOTE_BEARER")
+			}
+			if remoteHeader == "" {
+				remoteHeader = os.Getenv("HARPORIS_REMOTE_HEADER")
+			}
+			if token == "" {
+				token = os.Getenv("HARPORIS_REMOTE_TOKEN")
+			}
+			src, err := buildSource(translated, remoteURL, remoteAuth{
+				Token: token, User: remoteUser, Password: remotePassword,
+				Bearer: remoteBearer, Header: remoteHeader,
+				SSHKey: sshKey, KnownHosts: knownHosts,
+			})
 			if err != nil {
 				return err
 			}
@@ -155,9 +173,13 @@ func newScanCmd() *cobra.Command {
 	c.Flags().StringVar(&local, "local", "", "local repo path; host paths under $HOME are auto-translated to /host/<rel> via the getter's read-only $HOME mount (see --no-mount-host)")
 	c.Flags().BoolVar(&noMountHost, "no-mount-host", false, "disable auto-translation of --local; pass a container-side path (e.g. /repos/myrepo via docker-compose.override.yml)")
 	c.Flags().StringVar(&remoteURL, "remote-url", "", "remote repo URL (https:// or git@host:repo.git)")
-	c.Flags().StringVar(&token, "remote-token", "", "Bearer / PAT token for HTTPS remotes")
+	c.Flags().StringVar(&token, "remote-token", "", "Bearer / PAT token for HTTPS remotes (env: HARPORIS_REMOTE_TOKEN)")
 	c.Flags().StringVar(&sshKey, "remote-ssh-key", "", "path to SSH private key file (PEM)")
 	c.Flags().StringVar(&knownHosts, "remote-known-hosts", "", "path to known_hosts file")
+	c.Flags().StringVar(&remoteUser, "remote-user", "", "HTTPS Basic username (with --remote-password)")
+	c.Flags().StringVar(&remotePassword, "remote-password", "", "HTTPS Basic password (env: HARPORIS_REMOTE_PASSWORD)")
+	c.Flags().StringVar(&remoteBearer, "remote-bearer", "", "Bearer token → 'Authorization: Bearer <t>' (env: HARPORIS_REMOTE_BEARER)")
+	c.Flags().StringVar(&remoteHeader, "remote-header", "", "raw auth header 'Name: Value', e.g. 'PRIVATE-TOKEN: x' (env: HARPORIS_REMOTE_HEADER)")
 	c.Flags().StringVar(&branch, "branch", "", "branch name (branch_full / branch_diff)")
 	c.Flags().StringVar(&baseBranch, "base-branch", "", "base branch (branch_diff)")
 	c.Flags().StringVar(&commitFrom, "from", "", "commit from (commit_range, exclusive)")

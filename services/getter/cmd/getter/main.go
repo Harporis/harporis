@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -141,7 +142,7 @@ func buildDispatcher(cfg *config.Config, pub *getnats.Publisher, reg *scan.Regis
 		if walkMode == "" {
 			return fmt.Errorf("reject scan request: scan_type unset or unknown (%s)", req.Type.String())
 		}
-		source, err := sourceFromProto(req.Source)
+		source, err := sourceFromProto(req.Source, cfg)
 		if err != nil {
 			return fmt.Errorf("reject scan request: %w", err)
 		}
@@ -216,7 +217,9 @@ func loadGitAttributes(repoDir string) *filter.GitAttributes {
 // sourceFromProto maps a ScanRequest.Source to the internal git.Source
 // representation. Unset Source is rejected — every scan must declare what
 // it scans; defaulting silently to '.' (process CWD) was a bad surprise.
-func sourceFromProto(s *v1.Source) (git.Source, error) {
+// When cfg is non-nil and the request carries no per-scan auth, config
+// default_auth entries are applied via resolveAuth (first host match wins).
+func sourceFromProto(s *v1.Source, cfg *config.Config) (git.Source, error) {
 	if s == nil {
 		return nil, fmt.Errorf("Source field is required")
 	}
@@ -228,6 +231,7 @@ func sourceFromProto(s *v1.Source) (git.Source, error) {
 		return nil, fmt.Errorf("Source.remote.url is required when local_path is empty")
 	}
 	out := git.RemoteSource{URL: rem.Url}
+	reqHasAuth := rem.GetToken() != "" || rem.GetSsh() != nil || rem.GetBasic() != nil || rem.GetHeader() != nil
 	if tok := rem.GetToken(); tok != "" {
 		out.Token = tok
 	}
@@ -235,7 +239,59 @@ func sourceFromProto(s *v1.Source) (git.Source, error) {
 		out.SSHPrivateKeyPEM = []byte(ssh.PrivateKeyPem)
 		out.SSHKnownHosts = []byte(ssh.KnownHosts)
 	}
+	if b := rem.GetBasic(); b != nil {
+		out.BasicUser = b.GetUsername()
+		out.BasicPassword = b.GetPassword()
+	}
+	if h := rem.GetHeader(); h != nil {
+		out.Header.Name = h.GetName()
+		out.Header.Value = h.GetValue()
+	}
+	if cfg != nil {
+		tok, bu, bp, hn, hv := resolveAuth(rem.Url, reqHasAuth, cfg.Git.DefaultAuth)
+		if tok != "" {
+			out.Token = tok
+		}
+		if bu != "" {
+			out.BasicUser, out.BasicPassword = bu, bp
+		}
+		if hn != "" {
+			out.Header.Name, out.Header.Value = hn, hv
+		}
+	}
 	return out, nil
+}
+
+// resolveAuth returns the config-default credentials for rawURL's host
+// when the scan request carried no per-scan auth. Empty return = no
+// default applies (request already authed, or no host match). Host
+// matches exactly, or as a dot-suffix entry (".example.com" matches
+// "git.example.com"). First matching entry wins.
+func resolveAuth(rawURL string, reqHasAuth bool, defaults []config.HostAuth) (token, basicUser, basicPass, headerName, headerValue string) {
+	if reqHasAuth || len(defaults) == 0 {
+		return
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return
+	}
+	host := u.Hostname()
+	for _, ha := range defaults {
+		match := ha.Host == host ||
+			(strings.HasPrefix(ha.Host, ".") && strings.HasSuffix(host, ha.Host))
+		if !match {
+			continue
+		}
+		token = ha.Token
+		if ha.Basic != nil {
+			basicUser, basicPass = ha.Basic.User, ha.Basic.Password
+		}
+		if ha.Header != nil {
+			headerName, headerValue = ha.Header.Name, ha.Header.Value
+		}
+		return
+	}
+	return
 }
 
 func walkModeFromProto(t v1.ScanType) string {

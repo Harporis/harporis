@@ -17,6 +17,15 @@ resources:
 git:
   clone_timeout_seconds: 600
   cat_file_batch_buffer_kb: 64
+  # Per-host credential defaults, auto-applied to any scan of a matching
+  # host that carries NO per-scan auth. Matched by URL host (exact, or a
+  # ".example.com" dot-suffix). First match wins. Use ${VAR} for secrets
+  # (plaintext works but is discouraged). Exactly one method per entry.
+  # default_auth:
+  #   - host: gitlab.mycompany.com
+  #     header: { name: "PRIVATE-TOKEN", value: "${GITLAB_TOKEN}" }
+  #   - host: github.com
+  #     token: "${GITHUB_TOKEN}"
 
 chunking:
   row_size_target_kb: 256
