@@ -41,6 +41,12 @@ type RemoteSource struct {
 	BasicUser     string
 	BasicPassword string
 
+	// Arbitrary HTTP header auth (Bearer/JWT/PRIVATE-TOKEN/custom).
+	Header struct {
+		Name  string
+		Value string
+	}
+
 	// SSH auth
 	SSHPrivateKeyPEM []byte
 	SSHKnownHosts    []byte
@@ -184,6 +190,21 @@ func buildCloneCommand(src RemoteSource, dest string) (cloneCommand, error) {
 			Cleanup: cleanup,
 		}, nil
 
+	case authHTTPSHeader:
+		// Header value (which may be a secret token) is passed via
+		// git's GIT_CONFIG_* env vars so it never enters argv. Equivalent
+		// to `git -c http.extraHeader="<Name>: <Value>"` but argv-safe.
+		return cloneCommand{
+			Args: []string{"git", "clone", "--quiet", src.URL, dest},
+			Env: []string{
+				"GIT_TERMINAL_PROMPT=0",
+				"GIT_CONFIG_COUNT=1",
+				"GIT_CONFIG_KEY_0=http.extraHeader",
+				"GIT_CONFIG_VALUE_0=" + src.Header.Name + ": " + src.Header.Value,
+			},
+			Cleanup: noopCleanup,
+		}, nil
+
 	case authSSHKey:
 		keyPath, hostsPath, cleanup, err := writeSSHFiles(src)
 		if err != nil {
@@ -218,6 +239,7 @@ const (
 	authHTTPSNone authModeKind = iota
 	authHTTPSBearer
 	authHTTPSBasic
+	authHTTPSHeader
 	authSSHKey
 	authSSHAgent
 )
@@ -242,6 +264,9 @@ func authMode(src RemoteSource) authModeKind {
 	}
 	if src.BasicUser != "" {
 		return authHTTPSBasic
+	}
+	if src.Header.Name != "" {
+		return authHTTPSHeader
 	}
 	return authHTTPSNone
 }
@@ -333,6 +358,9 @@ func redactSecrets(src RemoteSource, msg string) string {
 	}
 	if src.BasicUser != "" {
 		msg = strings.ReplaceAll(msg, src.BasicUser+":", "<redacted-user>:")
+	}
+	if src.Header.Value != "" {
+		msg = strings.ReplaceAll(msg, src.Header.Value, "<redacted-header>")
 	}
 	return msg
 }
