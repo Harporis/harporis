@@ -3,7 +3,8 @@
 Git-aware secret hunter. A horizontally scalable pipeline that ingests
 git repositories, detects secrets with a hot-reloadable regex +
 Shannon-entropy rule pack, and materializes findings to durable
-sinks — NDJSON, SARIF, HTML, XLSX, PDF, Parquet.
+sinks — NDJSON, SARIF, HTML, XLSX, PDF, Parquet, and an opt-in
+SQLite store for cross-scan SQL.
 
 ## Architecture
 
@@ -19,6 +20,8 @@ sinks — NDJSON, SARIF, HTML, XLSX, PDF, Parquet.
                                                                   │  <scan_id>.{ndjson,sarif,  │
                                                                   │   html, xlsx, pdf,         │
                                                                   │   parquet}                 │
+                                                                  │  + findings.db (sqlite,    │
+                                                                  │    opt-in, shared)         │
                                                                   └────────────────────────────┘
 ```
 
@@ -26,10 +29,12 @@ sinks — NDJSON, SARIF, HTML, XLSX, PDF, Parquet.
 - `scanner` — pulls chunks, applies the rule pack (hot-reloaded from
   `services/scanner/rules/default.yaml`), publishes findings.
 - `writer` — pulls findings, fans out to enabled sinks
-  (NDJSON / SARIF / HTML / XLSX / PDF / Parquet), one file per
-  scan_id per format.
-- `harporis` (CLI) — submits scans, watches status, reads findings.
-  Works from any CWD; auto-discovers `NATS_TOKEN` on localhost.
+  (NDJSON / SARIF / HTML / XLSX / PDF / Parquet, plus an opt-in
+  shared SQLite `findings.db`), one file per scan_id per format.
+  An optional `severities` filter gates which levels are written.
+- `harporis` (CLI) — submits scans, watches single-scan or whole-fleet
+  status (`harporis watch`), and reads findings. Works from any CWD;
+  auto-discovers `NATS_TOKEN` on localhost.
 
 ## Install in one command
 
@@ -64,6 +69,12 @@ harporis findings show <scan_id>              # NDJSON, one finding per line
 harporis findings show <scan_id> -f pretty    # human-friendly table
 harporis findings show <scan_id> -f pdf > report.pdf
 
+# keep only high-signal levels at read time (works for every format):
+harporis findings show <scan_id> --severity CRITICAL,HIGH
+
+# watch the whole fleet of in-flight scans across replicas:
+harporis watch
+
 # tear down:
 make stack-down
 ```
@@ -80,6 +91,8 @@ Re-run the installer any time — every step is idempotent.
 | `HARPORIS_SQLITE_ENABLED` | `false` | Toggle the SQLite sink (one shared `findings.db` for cross-scan SQL queries). Opt-in: `HARPORIS_SQLITE_ENABLED=true docker compose up -d`. |
 | `harporis scan -f <list>` | empty = every enabled sink fires | Per-scan format selection. Accepted: `ndjson`, `sarif`, `html`, `xlsx`, `pdf`, `parquet`, `sqlite`. |
 | `harporis findings show -f <fmt>` | `ndjson` | Read-side formats: `ndjson`, `pretty`, `sarif`, `json`, `csv`, `md`, `html`, `xlsx`, `pdf`, `parquet`. |
+| `writer.yaml: severities` | empty = all levels | Write-side severity gate (before fan-out, applies to all sinks). Accepted: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. |
+| `harporis findings show --severity <list>` | empty = all levels | Read-side severity filter. Text formats filtered in-process; binary formats regenerated from NDJSON, leaving the on-disk report untouched. |
 
 ## Scaling
 

@@ -111,24 +111,29 @@ func replay(ctx context.Context, r io.Reader, out rebuildSink, scanID string, se
 	// well past the default 64 KiB so we don't choke on a wide line.
 	sc.Buffer(make([]byte, 0, 256*1024), 16*1024*1024)
 	um := protojson.UnmarshalOptions{DiscardUnknown: true}
+	// count tracks findings WRITTEN; lineNum tracks the physical NDJSON
+	// line so error messages stay accurate even when --severity skips
+	// some lines (count would otherwise undercount the real position).
 	var count int
+	var lineNum int
 	for sc.Scan() {
+		lineNum++
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
 		}
 		var f v1.Finding
 		if err := um.Unmarshal(line, &f); err != nil {
-			return count, fmt.Errorf("decode line %d: %w", count+1, err)
+			return count, fmt.Errorf("decode line %d: %w", lineNum, err)
 		}
 		if f.ScanId != scanID {
-			return count, fmt.Errorf("line %d carries scan_id %q, expected %q (mixed file?)", count+1, f.ScanId, scanID)
+			return count, fmt.Errorf("line %d carries scan_id %q, expected %q (mixed file?)", lineNum, f.ScanId, scanID)
 		}
 		if !sevSet.Contains(f.Severity) {
 			continue
 		}
 		if err := out.Write(ctx, &f); err != nil {
-			return count, fmt.Errorf("sink write %d: %w", count+1, err)
+			return count, fmt.Errorf("sink write at line %d: %w", lineNum, err)
 		}
 		count++
 	}

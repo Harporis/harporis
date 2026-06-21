@@ -86,3 +86,33 @@ func TestSeveritySet_UnknownLevelErrors(t *testing.T) {
 		t.Fatalf("expected error for unknown level")
 	}
 }
+
+func TestLoad_InvalidSeveritiesRejectsEarly(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "writer.yaml")
+	if err := os.WriteFile(p, []byte("severities: [BOGUS]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatalf("Load should reject an invalid severity level")
+	}
+}
+
+func TestLoad_ValidSeveritiesParse(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "writer.yaml")
+	if err := os.WriteFile(p, []byte("severities: [CRITICAL, HIGH]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := c.SeveritySet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.Contains(v1.Severity_CRITICAL) || set.Contains(v1.Severity_LOW) {
+		t.Fatalf("expected CRITICAL kept, LOW filtered")
+	}
+}
