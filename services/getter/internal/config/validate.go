@@ -62,5 +62,29 @@ func Validate(c *Config) error {
 	if c.NATS.Consumer.NakBackoffSeconds < 0 {
 		errs = append(errs, fmt.Errorf("nats.consumer.nak_backoff_seconds: must be >= 0 (got %d)", c.NATS.Consumer.NakBackoffSeconds))
 	}
+	for i, ha := range c.Git.DefaultAuth {
+		if ha.Host == "" {
+			errs = append(errs, fmt.Errorf("git.default_auth[%d].host: must not be empty", i))
+		}
+		n := 0
+		if ha.Token != "" {
+			n++
+		}
+		if ha.Basic != nil {
+			n++
+			if ha.Basic.User == "" || ha.Basic.Password == "" {
+				errs = append(errs, fmt.Errorf("git.default_auth[%d].basic: user and password required", i))
+			}
+		}
+		if ha.Header != nil {
+			n++
+			if ha.Header.Name == "" || ha.Header.Value == "" {
+				errs = append(errs, fmt.Errorf("git.default_auth[%d].header: name and value required", i))
+			}
+		}
+		if n != 1 {
+			errs = append(errs, fmt.Errorf("git.default_auth[%d]: exactly one of token/basic/header required (got %d)", i, n))
+		}
+	}
 	return errors.Join(errs...)
 }
