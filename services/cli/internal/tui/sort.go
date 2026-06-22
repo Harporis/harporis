@@ -77,8 +77,6 @@ func cmpInt64(a, b int64) int {
 // Defined fully in later tasks; declared here so FleetModel compiles.
 type viewMode int
 
-type detailState struct{}
-
 type historyLoader interface {
 	ShowHistory(scanID string, wait time.Duration) ([]*v1.StatusEvent, error)
 }

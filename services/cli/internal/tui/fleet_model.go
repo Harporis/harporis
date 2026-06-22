@@ -357,5 +357,4 @@ func (m FleetModel) FilterRaw() string                   { return m.filter.Raw()
 // Temporary stubs — replaced by Tasks 5–6.
 const viewDetail viewMode = 1
 
-func (m FleetModel) viewDetailString() string                         { return "" }
 func (m FleetModel) updateDetailKey(tea.KeyMsg) (tea.Model, tea.Cmd) { return m, nil }
