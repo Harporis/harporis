@@ -36,6 +36,19 @@ type FleetModel struct {
 	activeOnly bool
 	natsURL    string
 	err        error
+
+	cursor       int
+	sortCol      sortColumn
+	sortRev      bool
+	sortExplicit bool
+	filter       Filter
+	filtering    bool
+	filterInput  string
+	filterErr    string
+	view         viewMode
+	detail       detailState
+	height       int
+	cl           historyLoader
 }
 
 // NewFleetModel returns an empty dashboard.
@@ -115,24 +128,43 @@ func (m FleetModel) evictIfOver() {
 	delete(m.scans, victim)
 }
 
-// sorted returns scans ordered active-first, then by most-recent update.
+// sorted returns the filtered scans in display order. Without an explicit
+// sort column it keeps the default active-first / newest-first order; once
+// the operator picks a column it sorts purely by that column, ascending or
+// reversed, with a ScanId tiebreak.
 func (m FleetModel) sorted() []*v1.StatusEvent {
 	out := make([]*v1.StatusEvent, 0, len(m.scans))
 	for _, ev := range m.scans {
 		if m.activeOnly && IsTerminal(ev.State) {
 			continue
 		}
+		if !m.filter.Match(ev) {
+			continue
+		}
 		out = append(out, ev)
 	}
+	if !m.sortExplicit {
+		sort.Slice(out, func(i, j int) bool {
+			ai, aj := IsTerminal(out[i].State), IsTerminal(out[j].State)
+			if ai != aj {
+				return !ai // active (non-terminal) first
+			}
+			if out[i].Timestamp != out[j].Timestamp {
+				return out[i].Timestamp > out[j].Timestamp
+			}
+			return out[i].ScanId < out[j].ScanId
+		})
+		return out
+	}
 	sort.Slice(out, func(i, j int) bool {
-		ai, aj := IsTerminal(out[i].State), IsTerminal(out[j].State)
-		if ai != aj {
-			return !ai // active (non-terminal) first
+		c := compareColumn(out[i], out[j], m.sortCol)
+		if c == 0 {
+			return out[i].ScanId < out[j].ScanId
 		}
-		if out[i].Timestamp != out[j].Timestamp {
-			return out[i].Timestamp > out[j].Timestamp
+		if m.sortRev {
+			return c > 0
 		}
-		return out[i].ScanId < out[j].ScanId // deterministic tiebreak — no flicker
+		return c < 0
 	})
 	return out
 }
