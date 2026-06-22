@@ -126,7 +126,7 @@ func (m FleetModel) updateListKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 // clampCursor keeps cursor within valid bounds after the row count changes.
 func (m *FleetModel) clampCursor() {
 	n := len(m.sorted())
-	if m.cursor >= n {
+	if n > 0 && m.cursor >= n {
 		m.cursor = n - 1
 	}
 	if m.cursor < 0 {

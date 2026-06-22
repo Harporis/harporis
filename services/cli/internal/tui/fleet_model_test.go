@@ -173,3 +173,15 @@ func TestFleetModelHeaderCountsAllScans(t *testing.T) {
 		t.Fatalf("header should show total tracked scans under filter; got:\n%s", out)
 	}
 }
+
+func TestClampCursorEmptyVisibleSet(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "done", State: v1.ScanState_COMPLETED, Timestamp: 1}})
+	m = n.(FleetModel)
+	// Toggle active-only: the only scan is terminal, so visible set becomes empty.
+	f, _ := m.Update(keyMsg("f"))
+	m = f.(FleetModel)
+	if m.Cursor() < 0 {
+		t.Fatalf("cursor must never be negative, got %d", m.Cursor())
+	}
+}
