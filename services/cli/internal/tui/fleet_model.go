@@ -84,6 +84,16 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateListKey(v)
 	case fleetTickMsg:
 		return m, fleetTick()
+	case HistoryLoadedMsg:
+		if m.view == viewDetail && v.ScanID == m.detail.scanID {
+			m.detail.loading = false
+			if v.Err != nil {
+				m.detail.err = v.Err
+			} else {
+				m.detail.history = v.Events
+			}
+		}
+		return m, nil
 	case StatusEventMsg:
 		ev := v.Ev
 		prev, ok := m.scans[ev.ScanId]
@@ -92,6 +102,10 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.evictIfOver() // only a new scan_id can grow the map
 		} else if !(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
 			m.scans[ev.ScanId] = ev
+		}
+		if m.view == viewDetail && ev.ScanId == m.detail.scanID {
+			m.detail.latest = ev
+			m.detail.appendEvent(ev)
 		}
 		return m, nil
 	case SubscribeErrMsg:
@@ -136,6 +150,18 @@ func (m FleetModel) updateListKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		m.filterInput = m.filter.Raw()
 		m.filterErr = ""
+	case "enter":
+		rows := m.sorted()
+		if len(rows) == 0 {
+			return m, nil
+		}
+		if m.cursor >= len(rows) {
+			m.cursor = len(rows) - 1
+		}
+		sel := rows[m.cursor]
+		m.view = viewDetail
+		m.detail = detailState{scanID: sel.ScanId, latest: sel, loading: m.cl != nil}
+		return m, m.loadHistoryCmd(sel.ScanId)
 	}
 	return m, nil
 }
@@ -354,7 +380,61 @@ func (m FleetModel) SortState() (sortColumn, bool, bool) { return m.sortCol, m.s
 func (m FleetModel) Filtering() bool                     { return m.filtering }
 func (m FleetModel) FilterRaw() string                   { return m.filter.Raw() }
 
-// Temporary stubs — replaced by Tasks 5–6.
-const viewDetail viewMode = 1
+// viewMode distinguishes the list and drill-in views.
+type viewMode int
 
-func (m FleetModel) updateDetailKey(tea.KeyMsg) (tea.Model, tea.Cmd) { return m, nil }
+const (
+	viewList   viewMode = iota
+	viewDetail          // = 1
+)
+
+// historyLoader is the slice of *natscli.Client the fleet model needs for
+// drill-in. An interface keeps the tui package free of a natscli import
+// (and lets tests inject a fake).
+type historyLoader interface {
+	ShowHistory(scanID string, wait time.Duration) ([]*v1.StatusEvent, error)
+}
+
+// HistoryLoadedMsg delivers the result of a drill-in ShowHistory fetch.
+type HistoryLoadedMsg struct {
+	ScanID string
+	Events []*v1.StatusEvent
+	Err    error
+}
+
+// WithClient injects the history loader used on drill-in.
+func (m FleetModel) WithClient(cl historyLoader) FleetModel { m.cl = cl; return m }
+
+// ViewMode exposes the current view for tests.
+func (m FleetModel) ViewMode() viewMode { return m.view }
+
+func (m FleetModel) loadHistoryCmd(scanID string) tea.Cmd {
+	cl := m.cl
+	if cl == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		evs, err := cl.ShowHistory(scanID, time.Second)
+		return HistoryLoadedMsg{ScanID: scanID, Events: evs, Err: err}
+	}
+}
+
+func (m FleetModel) updateDetailKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.view = viewList
+		m.detail = detailState{}
+		return m, nil
+	case "up", "k":
+		if m.detail.offset > 0 {
+			m.detail.offset--
+		}
+	case "down", "j":
+		if m.detail.offset < len(m.detail.history)-1 {
+			m.detail.offset++
+		}
+	}
+	return m, nil
+}

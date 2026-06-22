@@ -2,7 +2,6 @@ package tui
 
 import (
 	"strings"
-	"time"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
@@ -74,9 +73,3 @@ func cmpInt64(a, b int64) int {
 	return 0
 }
 
-// Defined fully in later tasks; declared here so FleetModel compiles.
-type viewMode int
-
-type historyLoader interface {
-	ShowHistory(scanID string, wait time.Duration) ([]*v1.StatusEvent, error)
-}

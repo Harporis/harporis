@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
@@ -248,5 +249,81 @@ func TestHeaderShowsSortIndicator(t *testing.T) {
 	s1, _ := m.Update(keyMsg("s")) // explicit ScanID asc
 	if !strings.Contains(s1.(FleetModel).View(), "SCAN_ID↑") {
 		t.Fatalf("active sort column must show ↑; got:\n%s", s1.(FleetModel).View())
+	}
+}
+
+type fakeLoader struct {
+	events []*v1.StatusEvent
+	err    error
+	called string
+}
+
+func (f *fakeLoader) ShowHistory(scanID string, _ time.Duration) ([]*v1.StatusEvent, error) {
+	f.called = scanID
+	return f.events, f.err
+}
+
+func TestEnterOpensDetailAndLoadsHistory(t *testing.T) {
+	loader := &fakeLoader{events: []*v1.StatusEvent{{ScanId: "a", Timestamp: 1, State: v1.ScanState_PENDING, Message: "queued"}}}
+	m := NewFleetModel().WithClient(loader)
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 5}})
+	m = n.(FleetModel)
+
+	n2, cmd := m.Update(keyMsg("enter"))
+	m = n2.(FleetModel)
+	if m.ViewMode() != viewDetail {
+		t.Fatal("enter must switch to detail view")
+	}
+	if cmd == nil {
+		t.Fatal("enter must return a history-load Cmd")
+	}
+	// Execute the Cmd → it must produce a HistoryLoadedMsg for scan a.
+	msg := cmd()
+	loaded, ok := msg.(HistoryLoadedMsg)
+	if !ok || loaded.ScanID != "a" {
+		t.Fatalf("cmd must yield HistoryLoadedMsg for a, got %#v", msg)
+	}
+	n3, _ := m.Update(loaded)
+	m = n3.(FleetModel)
+	if !strings.Contains(m.View(), "queued") {
+		t.Fatalf("history must seed the detail view; got:\n%s", m.View())
+	}
+}
+
+func TestLiveEventAppendsToDetailWithDedup(t *testing.T) {
+	loader := &fakeLoader{events: []*v1.StatusEvent{{ScanId: "a", Timestamp: 1, State: v1.ScanState_PENDING}}}
+	m := NewFleetModel().WithClient(loader)
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 1}})
+	m = n.(FleetModel)
+	n2, cmd := m.Update(keyMsg("enter"))
+	m = n2.(FleetModel)
+	m2, _ := m.Update(cmd().(HistoryLoadedMsg))
+	m = m2.(FleetModel)
+	// A new live event with a fresh timestamp appends.
+	n3, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 2, Message: "walking"}})
+	m = n3.(FleetModel)
+	if !strings.Contains(m.View(), "walking") {
+		t.Fatalf("live event must append to detail history; got:\n%s", m.View())
+	}
+}
+
+func TestEscReturnsToListPreservingCursor(t *testing.T) {
+	loader := &fakeLoader{}
+	m := NewFleetModel().WithClient(loader)
+	for _, id := range []string{"a", "b", "c"} {
+		n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: id, State: v1.ScanState_RUNNING, Timestamp: 1}})
+		m = n.(FleetModel)
+	}
+	d, _ := m.Update(keyMsg("down")) // cursor -> 1
+	m = d.(FleetModel)
+	e, _ := m.Update(keyMsg("enter"))
+	m = e.(FleetModel)
+	b, _ := m.Update(keyMsg("esc"))
+	m = b.(FleetModel)
+	if m.ViewMode() != viewList {
+		t.Fatal("esc must return to list")
+	}
+	if m.Cursor() != 1 {
+		t.Fatalf("cursor must be preserved at 1, got %d", m.Cursor())
 	}
 }
