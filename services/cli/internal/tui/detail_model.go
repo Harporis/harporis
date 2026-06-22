@@ -45,6 +45,9 @@ func (m FleetModel) pageSize() int {
 
 func (m FleetModel) viewDetailString() string {
 	d := m.detail
+	if d.latest == nil {
+		return ui.BoxStyle.Render("scan " + d.scanID + "\n  loading…")
+	}
 	st := d.latest.GetState().String()
 	header := fmt.Sprintf("scan %s ── %s ── %s",
 		d.scanID,

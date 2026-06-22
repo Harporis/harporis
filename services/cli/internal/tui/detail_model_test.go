@@ -52,3 +52,10 @@ func TestViewDetailLoadingAndError(t *testing.T) {
 		t.Fatal("loading state must render a loading hint")
 	}
 }
+
+func TestViewDetailNilLatestNoPanic(t *testing.T) {
+	m := NewFleetModel()
+	m.view = viewDetail
+	m.detail = detailState{scanID: "s", latest: nil, loading: true}
+	_ = m.View() // must not panic
+}
