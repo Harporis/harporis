@@ -12,6 +12,7 @@ import (
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/contracts/scanstate"
 	"github.com/Harporis/harporis/kit/nats/wire"
+	"github.com/Harporis/harporis/services/cli/internal/scanmetrics"
 )
 
 // ListHistory walks the status stream and returns the latest status
@@ -33,6 +34,7 @@ func (c *Client) ListHistory(maxScans int, wait time.Duration) ([]*v1.StatusEven
 	}()
 
 	latest := map[string]*v1.StatusEvent{}
+	merged := map[string]*v1.ScanMetrics{}
 	for {
 		msgs, err := sub.Fetch(64, natsclient.MaxWait(wait))
 		if err != nil {
@@ -47,6 +49,7 @@ func (c *Client) ListHistory(maxScans int, wait time.Duration) ([]*v1.StatusEven
 				continue
 			}
 			prev, ok := latest[ev.ScanId]
+			merged[ev.ScanId] = scanmetrics.Merge(merged[ev.ScanId], ev.GetMetrics())
 			if !ok {
 				latest[ev.ScanId] = &ev
 			} else if !(scanstate.IsTerminal(prev.State) && !scanstate.IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
@@ -58,7 +61,8 @@ func (c *Client) ListHistory(maxScans int, wait time.Duration) ([]*v1.StatusEven
 		}
 	}
 	out := make([]*v1.StatusEvent, 0, len(latest))
-	for _, ev := range latest {
+	for id, ev := range latest {
+		ev.Metrics = merged[id]
 		out = append(out, ev)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp > out[j].Timestamp })

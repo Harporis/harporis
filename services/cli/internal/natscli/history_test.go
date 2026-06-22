@@ -100,6 +100,49 @@ func TestListHistoryTerminalStateSticky(t *testing.T) {
 	}
 }
 
+func TestListHistoryMergesMetricsAcrossEvents(t *testing.T) {
+	srv := runJetstream(t)
+	cl, err := Dial(srv.ClientURL(), "history-merge-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.EnsureStreams(); err != nil {
+		t.Fatal(err)
+	}
+
+	pub := func(id string, state v1.ScanState, ts int64, m *v1.ScanMetrics) {
+		data, _ := proto.Marshal(&v1.StatusEvent{ScanId: id, State: state, Timestamp: ts, Metrics: m})
+		if _, err := cl.JS.Publish(wire.StatusSubject(id), data,
+			nats.MsgId(fmt.Sprintf("%s:%s:%d", id, state.String(), ts))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Scanner RUNNING carries only secrets (ts=100); getter COMPLETED carries
+	// only throughput, secrets 0 (ts=200, terminal & newest -> wins display).
+	pub("a", v1.ScanState_RUNNING, 100, &v1.ScanMetrics{SecretsFound: 146})
+	pub("a", v1.ScanState_COMPLETED, 200, &v1.ScanMetrics{ChunksPublished: 284, BytesPublished: 1526734})
+
+	got, err := cl.ListHistory(5, 1*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 scan, got %d", len(got))
+	}
+	e := got[0]
+	if e.State != v1.ScanState_COMPLETED {
+		t.Fatalf("display state must be COMPLETED, got %s", e.State)
+	}
+	if e.GetMetrics().GetSecretsFound() != 146 {
+		t.Fatalf("merged secrets must survive: want 146, got %d", e.GetMetrics().GetSecretsFound())
+	}
+	if e.GetMetrics().GetChunksPublished() != 284 {
+		t.Fatalf("throughput must survive: want 284 chunks, got %d", e.GetMetrics().GetChunksPublished())
+	}
+}
+
 func TestShowHistoryReturnsOrdered(t *testing.T) {
 	srv := runJetstream(t)
 	cl, err := Dial(srv.ClientURL(), "history-show-test")

@@ -7,13 +7,13 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/services/cli/internal/scanmetrics"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 )
 
-const fleetFooter = "q quit · f filter active"
+const fleetFooter = "↑↓ move · enter open · s/S sort · / filter · f active · q quit"
 
 // maxFleetScans bounds the in-memory scan map so a long-lived `harporis
 // watch` session on a busy fleet cannot grow without limit. Community
@@ -36,6 +36,19 @@ type FleetModel struct {
 	activeOnly bool
 	natsURL    string
 	err        error
+
+	cursor       int
+	sortCol      sortColumn
+	sortRev      bool
+	sortExplicit bool
+	filter       Filter
+	filtering    bool
+	filterInput  string
+	filterErr    string
+	view         viewMode
+	detail       detailState
+	height       int
+	cl           historyLoader
 }
 
 // NewFleetModel returns an empty dashboard.
@@ -50,31 +63,74 @@ func (m FleetModel) WithNATSURL(u string) FleetModel { m.natsURL = u; return m }
 // not mutate the returned map.
 func (m FleetModel) Scans() map[string]*v1.StatusEvent { return m.scans }
 
+// Cursor exposes the selected row index for tests.
+func (m FleetModel) Cursor() int { return m.cursor }
+
 // Init starts the refresh tick.
 func (m FleetModel) Init() tea.Cmd { return fleetTick() }
 
 // Update folds events and handles keys.
 func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
-	case tea.KeyMsg:
-		switch v.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "f":
-			m.activeOnly = !m.activeOnly
-			return m, nil
-		}
+	case tea.WindowSizeMsg:
+		m.height = v.Height
 		return m, nil
+	case tea.KeyMsg:
+		if m.filtering {
+			return m.updateFilterInput(v)
+		}
+		if m.view == viewDetail {
+			return m.updateDetailKey(v)
+		}
+		return m.updateListKey(v)
 	case fleetTickMsg:
 		return m, fleetTick()
+	case HistoryLoadedMsg:
+		if m.view == viewDetail && v.ScanID == m.detail.scanID {
+			m.detail.loading = false
+			if v.Err != nil {
+				m.detail.err = v.Err
+			} else {
+				m.detail.history = v.Events
+			}
+		}
+		return m, nil
 	case StatusEventMsg:
 		ev := v.Ev
 		prev, ok := m.scans[ev.ScanId]
+		// Display precedence is unchanged: a newer non-terminal-overriding
+		// event wins state/message/timestamp. Metrics, however, arrive split
+		// across producers (getter throughput on COMPLETED, scanner secrets on
+		// RUNNING), so they are ALWAYS merged field-wise (max) into the
+		// retained snapshot — even when the event loses the display race.
+		display := ev
+		accepted := true
+		if ok && !(!(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp) {
+			display = prev
+			accepted = false
+		}
+		var prevMetrics *v1.ScanMetrics
+		if ok {
+			prevMetrics = prev.GetMetrics()
+		}
+		snap := &v1.StatusEvent{
+			ScanId:       display.ScanId,
+			State:        display.State,
+			Timestamp:    display.Timestamp,
+			Message:      display.Message,
+			Source:       display.Source,
+			OutputConfig: display.GetOutputConfig(),
+			Metrics:      scanmetrics.Merge(prevMetrics, ev.GetMetrics()),
+		}
+		m.scans[ev.ScanId] = snap
 		if !ok {
-			m.scans[ev.ScanId] = ev
 			m.evictIfOver() // only a new scan_id can grow the map
-		} else if !(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
-			m.scans[ev.ScanId] = ev
+		}
+		if m.view == viewDetail && ev.ScanId == m.detail.scanID {
+			m.detail.latest = snap // merged metrics + current display, always
+			if accepted {
+				m.detail.appendEvent(ev)
+			}
 		}
 		return m, nil
 	case SubscribeErrMsg:
@@ -82,6 +138,68 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// updateListKey handles key events in list mode.
+func (m FleetModel) updateListKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	rows := m.sorted()
+	switch v.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(rows)-1 {
+			m.cursor++
+		}
+	case "f":
+		m.activeOnly = !m.activeOnly
+		m.clampCursor()
+	case "s":
+		if !m.sortExplicit {
+			m.sortExplicit = true
+			m.sortCol = sortScanID
+		} else {
+			m.sortCol = m.sortCol.next()
+		}
+		m.clampCursor()
+	case "S":
+		if !m.sortExplicit {
+			m.sortExplicit = true
+			m.sortCol = sortScanID
+		}
+		m.sortRev = !m.sortRev
+	case "/":
+		m.filtering = true
+		m.filterInput = m.filter.Raw()
+		m.filterErr = ""
+	case "enter":
+		rows := m.sorted()
+		if len(rows) == 0 {
+			return m, nil
+		}
+		if m.cursor >= len(rows) {
+			m.cursor = len(rows) - 1
+		}
+		sel := rows[m.cursor]
+		m.view = viewDetail
+		m.detail = detailState{scanID: sel.ScanId, latest: sel, loading: m.cl != nil}
+		return m, m.loadHistoryCmd(sel.ScanId)
+	}
+	return m, nil
+}
+
+// clampCursor keeps cursor within valid bounds after the row count changes.
+func (m *FleetModel) clampCursor() {
+	n := len(m.sorted())
+	if n > 0 && m.cursor >= n {
+		m.cursor = n - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
 }
 
 // evictIfOver keeps the scan map bounded at maxFleetScans. It removes the
@@ -115,24 +233,43 @@ func (m FleetModel) evictIfOver() {
 	delete(m.scans, victim)
 }
 
-// sorted returns scans ordered active-first, then by most-recent update.
+// sorted returns the filtered scans in display order. Without an explicit
+// sort column it keeps the default active-first / newest-first order; once
+// the operator picks a column it sorts purely by that column, ascending or
+// reversed, with a ScanId tiebreak.
 func (m FleetModel) sorted() []*v1.StatusEvent {
 	out := make([]*v1.StatusEvent, 0, len(m.scans))
 	for _, ev := range m.scans {
 		if m.activeOnly && IsTerminal(ev.State) {
 			continue
 		}
+		if !m.filter.Match(ev) {
+			continue
+		}
 		out = append(out, ev)
 	}
+	if !m.sortExplicit {
+		sort.Slice(out, func(i, j int) bool {
+			ai, aj := IsTerminal(out[i].State), IsTerminal(out[j].State)
+			if ai != aj {
+				return !ai // active (non-terminal) first
+			}
+			if out[i].Timestamp != out[j].Timestamp {
+				return out[i].Timestamp > out[j].Timestamp
+			}
+			return out[i].ScanId < out[j].ScanId
+		})
+		return out
+	}
 	sort.Slice(out, func(i, j int) bool {
-		ai, aj := IsTerminal(out[i].State), IsTerminal(out[j].State)
-		if ai != aj {
-			return !ai // active (non-terminal) first
+		c := compareColumn(out[i], out[j], m.sortCol)
+		if c == 0 {
+			return out[i].ScanId < out[j].ScanId
 		}
-		if out[i].Timestamp != out[j].Timestamp {
-			return out[i].Timestamp > out[j].Timestamp
+		if m.sortRev {
+			return c > 0
 		}
-		return out[i].ScanId < out[j].ScanId // deterministic tiebreak — no flicker
+		return c < 0
 	})
 	return out
 }
@@ -142,6 +279,14 @@ func (m FleetModel) View() string {
 	if m.err != nil {
 		return ui.BoxStyle.Render("error: " + m.err.Error())
 	}
+	if m.view == viewDetail {
+		return m.viewDetailString()
+	}
+	return m.viewListString()
+}
+
+// viewListString renders the list view with a cursor gutter column.
+func (m FleetModel) viewListString() string {
 	rows := m.sorted()
 	countLabel := fmt.Sprintf("%d scans", len(m.scans))
 	if m.activeOnly {
@@ -151,14 +296,37 @@ func (m FleetModel) View() string {
 		countLabel, ui.DimStyle.Render(m.natsURL),
 		time.Now().UTC().Format("15:04:05"))
 	if len(rows) == 0 {
-		body := ui.DimStyle.Render("(no scans yet, waiting…)")
-		footer := ui.DimStyle.Render(fleetFooter)
-		return ui.BoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
+		var sb strings.Builder
+		sb.WriteString(header + "\n")
+		sb.WriteString(ui.DimStyle.Render("(no scans yet, waiting…)") + "\n")
+		if m.filtering {
+			sb.WriteString(ui.InfoStyle.Render("filter> "+m.filterInput) + "\n")
+		} else if m.filter.Raw() != "" {
+			sb.WriteString(ui.DimStyle.Render("filter: "+m.filter.Raw()) + "\n")
+		}
+		if m.filterErr != "" {
+			sb.WriteString(ui.ErrStyle.Render(m.filterErr) + "\n")
+		}
+		sb.WriteString(ui.DimStyle.Render(fleetFooter))
+		return ui.BoxStyle.Render(sb.String())
 	}
-	t := ui.NewTable("SCAN_ID", "STATE", "SOURCE", "CHUNKS", "SECRETS", "UPDATED")
-	for _, e := range rows {
+	t := ui.NewTable(
+		"",
+		m.columnHeader(sortScanID),
+		m.columnHeader(sortState),
+		m.columnHeader(sortSource),
+		m.columnHeader(sortChunks),
+		m.columnHeader(sortSecrets),
+		m.columnHeader(sortUpdated),
+	)
+	for i, e := range rows {
+		marker := " "
+		if i == m.cursor {
+			marker = ui.BrandStyle.Render(">")
+		}
 		mtr := e.GetMetrics()
 		t.Row(
+			marker,
 			e.ScanId,
 			ui.StateStyle(e.State.String()).Render(e.State.String()),
 			e.GetSource(),
@@ -170,6 +338,14 @@ func (m FleetModel) View() string {
 	var sb strings.Builder
 	sb.WriteString(header + "\n")
 	_, _ = t.WriteTo(&sb)
+	if m.filtering {
+		sb.WriteString(ui.InfoStyle.Render("filter> "+m.filterInput) + "\n")
+	} else if m.filter.Raw() != "" {
+		sb.WriteString(ui.DimStyle.Render("filter: "+m.filter.Raw()) + "\n")
+	}
+	if m.filterErr != "" {
+		sb.WriteString(ui.ErrStyle.Render(m.filterErr) + "\n")
+	}
 	sb.WriteString(ui.DimStyle.Render(fleetFooter))
 	return ui.BoxStyle.Render(sb.String())
 }
@@ -181,4 +357,109 @@ func agoString(unix int64) string {
 		d = 0
 	}
 	return d.String() + " ago"
+}
+
+func (m FleetModel) updateFilterInput(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.String() {
+	case "esc":
+		m.filtering = false
+		m.filterErr = ""
+		return m, nil
+	case "enter":
+		f, err := ParseFilter(m.filterInput)
+		if err != nil {
+			m.filterErr = "filter error: " + err.Error()
+			return m, nil
+		}
+		m.filter = f
+		m.filtering = false
+		m.filterErr = ""
+		m.clampCursor()
+		return m, nil
+	case "backspace":
+		if r := []rune(m.filterInput); len(r) > 0 {
+			m.filterInput = string(r[:len(r)-1])
+		}
+		return m, nil
+	default:
+		if len(v.Runes) > 0 {
+			m.filterInput += string(v.Runes)
+		}
+		return m, nil
+	}
+}
+
+func (m FleetModel) columnHeader(c sortColumn) string {
+	h := c.label()
+	if m.sortExplicit && m.sortCol == c {
+		if m.sortRev {
+			return h + "↓"
+		}
+		return h + "↑"
+	}
+	return h
+}
+
+// Test accessors.
+func (m FleetModel) SortState() (sortColumn, bool, bool) { return m.sortCol, m.sortRev, m.sortExplicit }
+func (m FleetModel) Filtering() bool                     { return m.filtering }
+func (m FleetModel) FilterRaw() string                   { return m.filter.Raw() }
+
+// viewMode distinguishes the list and drill-in views.
+type viewMode int
+
+const (
+	viewList   viewMode = iota
+	viewDetail          // = 1
+)
+
+// historyLoader is the slice of *natscli.Client the fleet model needs for
+// drill-in. An interface keeps the tui package free of a natscli import
+// (and lets tests inject a fake).
+type historyLoader interface {
+	ShowHistory(scanID string, wait time.Duration) ([]*v1.StatusEvent, error)
+}
+
+// HistoryLoadedMsg delivers the result of a drill-in ShowHistory fetch.
+type HistoryLoadedMsg struct {
+	ScanID string
+	Events []*v1.StatusEvent
+	Err    error
+}
+
+// WithClient injects the history loader used on drill-in.
+func (m FleetModel) WithClient(cl historyLoader) FleetModel { m.cl = cl; return m }
+
+// ViewMode exposes the current view for tests.
+func (m FleetModel) ViewMode() viewMode { return m.view }
+
+func (m FleetModel) loadHistoryCmd(scanID string) tea.Cmd {
+	cl := m.cl
+	if cl == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		evs, err := cl.ShowHistory(scanID, time.Second)
+		return HistoryLoadedMsg{ScanID: scanID, Events: evs, Err: err}
+	}
+}
+
+func (m FleetModel) updateDetailKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.view = viewList
+		m.detail = detailState{}
+		return m, nil
+	case "up", "k":
+		if m.detail.offset > 0 {
+			m.detail.offset--
+		}
+	case "down", "j":
+		if m.detail.offset < len(m.detail.history)-1 {
+			m.detail.offset++
+		}
+	}
+	return m, nil
 }
