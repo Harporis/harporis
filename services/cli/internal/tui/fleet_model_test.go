@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
 
@@ -103,6 +104,58 @@ func TestFleetModelSortAndActiveFilter(t *testing.T) {
 		if e.ScanId == "done-old" {
 			t.Fatalf("terminal scan leaked into activeOnly view")
 		}
+	}
+}
+
+func keyMsg(s string) tea.KeyMsg {
+	if len(s) == 1 {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+	switch s {
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func TestCursorNavigationClamps(t *testing.T) {
+	m := NewFleetModel()
+	send := func(fm FleetModel, id string, st v1.ScanState, ts int64) FleetModel {
+		next, _ := fm.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: id, State: st, Timestamp: ts}})
+		return next.(FleetModel)
+	}
+	m = send(m, "a", v1.ScanState_RUNNING, 3)
+	m = send(m, "b", v1.ScanState_RUNNING, 2)
+	m = send(m, "c", v1.ScanState_RUNNING, 1)
+
+	// Up at top stays at 0.
+	up, _ := m.Update(keyMsg("up"))
+	if up.(FleetModel).Cursor() != 0 {
+		t.Fatalf("cursor must clamp at 0, got %d", up.(FleetModel).Cursor())
+	}
+	// Down moves, and clamps at the last row (3 rows -> max index 2).
+	cur := m
+	for i := 0; i < 5; i++ {
+		n, _ := cur.Update(keyMsg("down"))
+		cur = n.(FleetModel)
+	}
+	if cur.Cursor() != 2 {
+		t.Fatalf("cursor must clamp at last row (2), got %d", cur.Cursor())
+	}
+}
+
+func TestViewShowsCursorMarker(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "only", State: v1.ScanState_RUNNING, Timestamp: 1}})
+	m = n.(FleetModel)
+	if !strings.Contains(m.View(), ">") {
+		t.Fatalf("list view must render a cursor marker; got:\n%s", m.View())
 	}
 }
 

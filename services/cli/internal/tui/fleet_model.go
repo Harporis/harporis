@@ -63,21 +63,26 @@ func (m FleetModel) WithNATSURL(u string) FleetModel { m.natsURL = u; return m }
 // not mutate the returned map.
 func (m FleetModel) Scans() map[string]*v1.StatusEvent { return m.scans }
 
+// Cursor exposes the selected row index for tests.
+func (m FleetModel) Cursor() int { return m.cursor }
+
 // Init starts the refresh tick.
 func (m FleetModel) Init() tea.Cmd { return fleetTick() }
 
 // Update folds events and handles keys.
 func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
-	case tea.KeyMsg:
-		switch v.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "f":
-			m.activeOnly = !m.activeOnly
-			return m, nil
-		}
+	case tea.WindowSizeMsg:
+		m.height = v.Height
 		return m, nil
+	case tea.KeyMsg:
+		if m.filtering {
+			return m.updateFilterInput(v) // defined in Task 4
+		}
+		if m.view == viewDetail {
+			return m.updateDetailKey(v) // defined in Task 6
+		}
+		return m.updateListKey(v)
 	case fleetTickMsg:
 		return m, fleetTick()
 	case StatusEventMsg:
@@ -95,6 +100,38 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// updateListKey handles key events in list mode.
+func (m FleetModel) updateListKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	rows := m.sorted()
+	switch v.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(rows)-1 {
+			m.cursor++
+		}
+	case "f":
+		m.activeOnly = !m.activeOnly
+		m.clampCursor()
+	}
+	return m, nil
+}
+
+// clampCursor keeps cursor within valid bounds after the row count changes.
+func (m *FleetModel) clampCursor() {
+	n := len(m.sorted())
+	if m.cursor >= n {
+		m.cursor = n - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
 }
 
 // evictIfOver keeps the scan map bounded at maxFleetScans. It removes the
@@ -174,6 +211,14 @@ func (m FleetModel) View() string {
 	if m.err != nil {
 		return ui.BoxStyle.Render("error: " + m.err.Error())
 	}
+	if m.view == viewDetail {
+		return m.viewDetailString() // defined in Task 5
+	}
+	return m.viewListString()
+}
+
+// viewListString renders the list view with a cursor gutter column.
+func (m FleetModel) viewListString() string {
 	rows := m.sorted()
 	countLabel := fmt.Sprintf("%d scans", len(m.scans))
 	if m.activeOnly {
@@ -187,10 +232,15 @@ func (m FleetModel) View() string {
 		footer := ui.DimStyle.Render(fleetFooter)
 		return ui.BoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
 	}
-	t := ui.NewTable("SCAN_ID", "STATE", "SOURCE", "CHUNKS", "SECRETS", "UPDATED")
-	for _, e := range rows {
+	t := ui.NewTable("", "SCAN_ID", "STATE", "SOURCE", "CHUNKS", "SECRETS", "UPDATED")
+	for i, e := range rows {
+		marker := " "
+		if i == m.cursor {
+			marker = ui.BrandStyle.Render(">")
+		}
 		mtr := e.GetMetrics()
 		t.Row(
+			marker,
 			e.ScanId,
 			ui.StateStyle(e.State.String()).Render(e.State.String()),
 			e.GetSource(),
@@ -214,3 +264,10 @@ func agoString(unix int64) string {
 	}
 	return d.String() + " ago"
 }
+
+// Temporary stubs — replaced by Tasks 4–6.
+const viewDetail viewMode = 1
+
+func (m FleetModel) viewDetailString() string                          { return "" }
+func (m FleetModel) updateDetailKey(tea.KeyMsg) (tea.Model, tea.Cmd)  { return m, nil }
+func (m FleetModel) updateFilterInput(tea.KeyMsg) (tea.Model, tea.Cmd) { return m, nil }
