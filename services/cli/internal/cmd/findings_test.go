@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/contracts/severity"
+	"github.com/Harporis/harporis/services/cli/internal/findings"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -58,7 +59,7 @@ func TestResolveFindingsName(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resolveFindingsName(tc.names, scan, tc.ext)
+			got := findings.ResolveFindingsName(tc.names, scan, tc.ext)
 			if got != tc.want {
 				t.Errorf("resolveFindingsName(%v, %q, %q) = %q, want %q", tc.names, scan, tc.ext, got, tc.want)
 			}

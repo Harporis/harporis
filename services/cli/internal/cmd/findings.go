@@ -22,6 +22,7 @@ import (
 	"github.com/Harporis/harporis/contracts/severity"
 	kitscan "github.com/Harporis/harporis/kit/scan"
 	"github.com/Harporis/harporis/services/cli/internal/compose"
+	"github.com/Harporis/harporis/services/cli/internal/findings"
 )
 
 func newFindingsCmd() *cobra.Command {
@@ -174,7 +175,7 @@ func newFindingsShowCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				body, err = readFindingsFile(scanID, ext, outputDir)
+				body, err = findings.ReadFile(scanID, ext, outputDir)
 				if err != nil {
 					return err
 				}
@@ -312,124 +313,6 @@ func regenProxyWithSeverity(scanID, format, severityCSV, outputDir string) (stri
 	return body, nil
 }
 
-// resolveFindingsName picks the on-disk filename for a scan's <ext> report
-// out of a directory listing. The writer writes a bare <scan><ext> in the
-// legacy single-pool mode, but a replica-suffixed <scan>.<replicahash><ext>
-// when HARPORIS_FINDINGS_SHARDS=1. The bare name is preferred; a suffixed
-// match is the fallback. Tempfiles (<scan>.<ext>.tmp-*) and other formats
-// are ignored. Returns "" when neither form is present.
-func resolveFindingsName(names []string, scanID, ext string) string {
-	bare := scanID + ext
-	if slices.Contains(names, bare) {
-		return bare
-	}
-	// Suffixed: <scan>.<hash><ext>, e.g. <scan>.3bad9a0183a5.pdf. The char
-	// after scanID must be '.' so we never match a different scan_id that
-	// merely shares this one as a prefix.
-	for _, n := range names {
-		if strings.HasPrefix(n, scanID+".") && strings.HasSuffix(n, ext) {
-			return n
-		}
-	}
-	return ""
-}
-
-// availableFindingsExts lists the distinct report extensions present for a
-// scan (bare or replica-suffixed), so a "no <fmt> report" error can tell
-// the operator which formats *are* available. Tempfiles are skipped.
-func availableFindingsExts(names []string, scanID string) []string {
-	seen := map[string]struct{}{}
-	var exts []string
-	for _, n := range names {
-		if !strings.HasPrefix(n, scanID+".") {
-			continue
-		}
-		ext := n[strings.LastIndexByte(n, '.'):]
-		if strings.Contains(ext, "tmp") {
-			continue
-		}
-		if _, ok := seen[ext]; ok {
-			continue
-		}
-		seen[ext] = struct{}{}
-		exts = append(exts, ext)
-	}
-	slices.Sort(exts)
-	return exts
-}
-
-// noReportErr builds the clear "no <ext> report for this scan" error,
-// listing the formats that do exist instead of a raw `cat: No such file`.
-func noReportErr(scanID, ext string, names []string) error {
-	avail := availableFindingsExts(names, scanID)
-	if len(avail) == 0 {
-		return fmt.Errorf("no findings for scan %s (unknown scan_id, or the writer hasn't materialized it yet)", scanID)
-	}
-	return fmt.Errorf("no %s report for scan %s — sink disabled or excluded by per-scan -f; available: %s",
-		strings.TrimPrefix(ext, "."), scanID, strings.Join(avail, ", "))
-}
-
-// readFindingsFile returns the contents of the scan's <ext> report,
-// either from a host directory (--output-dir) or via
-// `docker compose exec writer cat`. It tolerates the replica suffix the
-// writer adds in sharded mode (<scan>.<replicahash><ext>), so proxy
-// formats (pdf/html/sarif/xlsx/parquet) resolve the same as ndjson.
-func readFindingsFile(scanID, ext, outputDir string) (string, error) {
-	if outputDir != "" {
-		entries, err := os.ReadDir(outputDir)
-		if err != nil {
-			return "", fmt.Errorf("read dir %s: %w", outputDir, err)
-		}
-		names := make([]string, len(entries))
-		for i, e := range entries {
-			names[i] = e.Name()
-		}
-		name := resolveFindingsName(names, scanID, ext)
-		if name == "" {
-			return "", noReportErr(scanID, ext, names)
-		}
-		b, err := os.ReadFile(outputDir + "/" + name)
-		if err != nil {
-			return "", fmt.Errorf("read %s: %w", name, err)
-		}
-		return string(b), nil
-	}
-	const dir = "/var/lib/harporis/findings"
-	co, err := compose.NewDefault()
-	if err != nil {
-		return "", fmt.Errorf("docker compose not available: %w (pass --output-dir for host file access)", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	listing, err := co.Exec(ctx, "writer", "ls", "-1", dir)
-	if err != nil {
-		detail := strings.TrimSpace(listing)
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "", fmt.Errorf("compose exec writer ls %s: %s", dir, detail)
-	}
-	var names []string
-	for _, n := range strings.Split(listing, "\n") {
-		if n = strings.TrimSpace(n); n != "" {
-			names = append(names, n)
-		}
-	}
-	name := resolveFindingsName(names, scanID, ext)
-	if name == "" {
-		return "", noReportErr(scanID, ext, names)
-	}
-	path := dir + "/" + name
-	body, err := co.Exec(ctx, "writer", "cat", path)
-	if err != nil {
-		detail := strings.TrimSpace(body)
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "", fmt.Errorf("compose exec writer cat %s: %s", path, detail)
-	}
-	return body, nil
-}
 
 func newFindingsListCmd() *cobra.Command {
 	var outputDir string
@@ -513,23 +396,6 @@ func listLocalDir(dir string, w io.Writer) error {
 	return nil
 }
 
-// prettyFinding is the subset of the writer's NDJSON shape that
-// --pretty renders. protojson emits snake_case field names (the writer
-// sets UseProtoNames: true), so the json tags here match.
-type prettyFinding struct {
-	ScanID        string `json:"scan_id"`
-	FindingID     string `json:"finding_id"`
-	RuleID        string `json:"rule_id"`
-	Severity      string `json:"severity"`
-	FilePath      string `json:"file_path"`
-	LineNumber    int    `json:"line_number"`
-	LineNumberEnd int    `json:"line_number_end"`
-	MatchedSecret string `json:"matched_secret"` // base64-encoded (bytes type in proto)
-	Refs          []struct {
-		Path string `json:"path"`
-	} `json:"refs"`
-}
-
 // renderPrettyFindings reads NDJSON from r and writes a tab-aligned
 // human-readable table to w. Each finding becomes one row; the secret
 // preview is the decoded matched_secret truncated to ~48 chars with
@@ -545,14 +411,14 @@ func renderPrettyFindings(r io.Reader, w io.Writer) error {
 		if line == "" {
 			continue
 		}
-		var f prettyFinding
+		var f findings.Finding
 		if err := json.Unmarshal([]byte(line), &f); err != nil {
-			fmt.Fprintf(tw, "?\tparse-error\t-\t%s\n", truncSecret(line, 48))
+			fmt.Fprintf(tw, "?\tparse-error\t-\t%s\n", findings.DecodeAndPreview(line, 48))
 			count++
 			continue
 		}
-		loc := formatLocation(f)
-		secret := decodeAndPreview(f.MatchedSecret, 48)
+		loc := f.Location()
+		secret := findings.DecodeAndPreview(f.MatchedSecret, 48)
 		rule := f.RuleID
 		if rule == "" {
 			rule = "-"
@@ -569,71 +435,23 @@ func renderPrettyFindings(r io.Reader, w io.Writer) error {
 	return tw.Flush()
 }
 
-func formatLocation(f prettyFinding) string {
-	switch {
-	case f.FilePath != "" && f.LineNumber > 0:
-		return fmt.Sprintf("%s:%d", f.FilePath, f.LineNumber)
-	case f.FilePath != "":
-		return f.FilePath
-	case len(f.Refs) > 0 && f.Refs[0].Path != "":
-		if f.LineNumber > 0 {
-			return fmt.Sprintf("%s:%d", f.Refs[0].Path, f.LineNumber)
-		}
-		return f.Refs[0].Path
-	default:
-		return "-"
-	}
-}
-
-func decodeAndPreview(b64 string, max int) string {
-	if b64 == "" {
-		return "-"
-	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return truncSecret(b64, max) + " (raw)"
-	}
-	return truncSecret(string(raw), max)
-}
-
-// truncSecret replaces non-printable runes with '.' and clips to max
-// chars. Newline/tab/CR all collapse to '.' so the table stays aligned.
-func truncSecret(s string, max int) string {
-	var b strings.Builder
-	b.Grow(min(len(s), max))
-	for i, r := range s {
-		if i >= max {
-			b.WriteString("…")
-			break
-		}
-		if r == utf8Replacement || !unicode.IsPrint(r) {
-			b.WriteByte('.')
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-const utf8Replacement = '�'
-
-// parseNDJSON decodes the writer's NDJSON output into prettyFinding
+// parseNDJSON decodes the writer's NDJSON output into findings.Finding
 // values, skipping blank lines. Lines that fail to unmarshal are
 // returned as zero-value entries with ScanID == "" so callers can
 // surface them with a "parse-error" row instead of aborting the whole
 // render. Returns the bufio.Scanner error if the stream itself broke.
-func parseNDJSON(r io.Reader) ([]prettyFinding, error) {
+func parseNDJSON(r io.Reader) ([]findings.Finding, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	var out []prettyFinding
+	var out []findings.Finding
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
 		}
-		var f prettyFinding
+		var f findings.Finding
 		if err := json.Unmarshal([]byte(line), &f); err != nil {
-			out = append(out, prettyFinding{RuleID: "parse-error", Severity: "?"})
+			out = append(out, findings.Finding{RuleID: "parse-error", Severity: "?"})
 			continue
 		}
 		out = append(out, f)
@@ -733,7 +551,7 @@ func renderMarkdown(r io.Reader, w io.Writer) error {
 	for _, f := range findings {
 		secret := stripControl(decodeRaw(f.MatchedSecret))
 		secret = strings.ReplaceAll(secret, "|", "\\|")
-		loc := formatLocation(f)
+		loc := f.Location()
 		rule := f.RuleID
 		if rule == "" {
 			rule = "-"
