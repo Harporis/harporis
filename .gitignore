@@ -54,3 +54,4 @@ docker-compose.override.yml
 .claude/
 .superpowers/
 HANDOFF.md
+docs/superpowers/
