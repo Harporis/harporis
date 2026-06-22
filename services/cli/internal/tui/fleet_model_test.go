@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 )
 
@@ -106,6 +108,58 @@ func TestFleetModelSortAndActiveFilter(t *testing.T) {
 	}
 }
 
+func keyMsg(s string) tea.KeyMsg {
+	if len(s) == 1 {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+	switch s {
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func TestCursorNavigationClamps(t *testing.T) {
+	m := NewFleetModel()
+	send := func(fm FleetModel, id string, st v1.ScanState, ts int64) FleetModel {
+		next, _ := fm.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: id, State: st, Timestamp: ts}})
+		return next.(FleetModel)
+	}
+	m = send(m, "a", v1.ScanState_RUNNING, 3)
+	m = send(m, "b", v1.ScanState_RUNNING, 2)
+	m = send(m, "c", v1.ScanState_RUNNING, 1)
+
+	// Up at top stays at 0.
+	up, _ := m.Update(keyMsg("up"))
+	if up.(FleetModel).Cursor() != 0 {
+		t.Fatalf("cursor must clamp at 0, got %d", up.(FleetModel).Cursor())
+	}
+	// Down moves, and clamps at the last row (3 rows -> max index 2).
+	cur := m
+	for i := 0; i < 5; i++ {
+		n, _ := cur.Update(keyMsg("down"))
+		cur = n.(FleetModel)
+	}
+	if cur.Cursor() != 2 {
+		t.Fatalf("cursor must clamp at last row (2), got %d", cur.Cursor())
+	}
+}
+
+func TestViewShowsCursorMarker(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "only", State: v1.ScanState_RUNNING, Timestamp: 1}})
+	m = n.(FleetModel)
+	if !strings.Contains(m.View(), ">") {
+		t.Fatalf("list view must render a cursor marker; got:\n%s", m.View())
+	}
+}
+
 func TestFleetModelHeaderCountsAllScans(t *testing.T) {
 	m := NewFleetModel()
 	send := func(fm FleetModel, id string, st v1.ScanState, ts int64) FleetModel {
@@ -118,5 +172,178 @@ func TestFleetModelHeaderCountsAllScans(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "1 active / 2 scans") {
 		t.Fatalf("header should show total tracked scans under filter; got:\n%s", out)
+	}
+}
+
+func TestClampCursorEmptyVisibleSet(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "done", State: v1.ScanState_COMPLETED, Timestamp: 1}})
+	m = n.(FleetModel)
+	// Toggle active-only: the only scan is terminal, so visible set becomes empty.
+	f, _ := m.Update(keyMsg("f"))
+	m = f.(FleetModel)
+	if m.Cursor() < 0 {
+		t.Fatalf("cursor must never be negative, got %d", m.Cursor())
+	}
+}
+
+func TestSortKeysCycleAndReverse(t *testing.T) {
+	m := NewFleetModel()
+	s1, _ := m.Update(keyMsg("s"))
+	col, rev, explicit := s1.(FleetModel).SortState()
+	if !explicit || col != sortScanID || rev {
+		t.Fatalf("first s: want explicit ScanID asc, got col=%d rev=%v explicit=%v", col, rev, explicit)
+	}
+	s2, _ := s1.(FleetModel).Update(keyMsg("s"))
+	col, _, _ = s2.(FleetModel).SortState()
+	if col != sortState {
+		t.Fatalf("second s: want STATE, got %d", col)
+	}
+	rev1, _ := s2.(FleetModel).Update(keyMsg("S"))
+	_, rev, _ = rev1.(FleetModel).SortState()
+	if !rev {
+		t.Fatal("S must toggle reverse")
+	}
+}
+
+func TestFilterInputApplies(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(keyMsg("/"))
+	m = n.(FleetModel)
+	if !m.Filtering() {
+		t.Fatal("/ must enter filter mode")
+	}
+	for _, ch := range []string{"s", "t", "a", "t", "e", ":", "r", "u", "n"} {
+		n, _ = m.Update(keyMsg(ch))
+		m = n.(FleetModel)
+	}
+	n, _ = m.Update(keyMsg("enter"))
+	m = n.(FleetModel)
+	if m.Filtering() {
+		t.Fatal("enter must leave filter mode")
+	}
+	if m.FilterRaw() != "state:run" {
+		t.Fatalf("filter not applied, got %q", m.FilterRaw())
+	}
+}
+
+func TestFilterInputUnknownKeyShowsError(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(keyMsg("/"))
+	m = n.(FleetModel)
+	for _, ch := range []string{"x", ":", "y"} {
+		n, _ = m.Update(keyMsg(ch))
+		m = n.(FleetModel)
+	}
+	n, _ = m.Update(keyMsg("enter"))
+	m = n.(FleetModel)
+	if !strings.Contains(m.View(), "filter error") {
+		t.Fatalf("invalid filter must surface an error in the view; got:\n%s", m.View())
+	}
+}
+
+func TestHeaderShowsSortIndicator(t *testing.T) {
+	m := NewFleetModel()
+	nn, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 1}})
+	m = nn.(FleetModel)
+	s1, _ := m.Update(keyMsg("s")) // explicit ScanID asc
+	if !strings.Contains(s1.(FleetModel).View(), "SCAN_ID↑") {
+		t.Fatalf("active sort column must show ↑; got:\n%s", s1.(FleetModel).View())
+	}
+}
+
+type fakeLoader struct {
+	events []*v1.StatusEvent
+	err    error
+	called string
+}
+
+func (f *fakeLoader) ShowHistory(scanID string, _ time.Duration) ([]*v1.StatusEvent, error) {
+	f.called = scanID
+	return f.events, f.err
+}
+
+func TestEnterOpensDetailAndLoadsHistory(t *testing.T) {
+	loader := &fakeLoader{events: []*v1.StatusEvent{{ScanId: "a", Timestamp: 1, State: v1.ScanState_PENDING, Message: "queued"}}}
+	m := NewFleetModel().WithClient(loader)
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 5}})
+	m = n.(FleetModel)
+
+	n2, cmd := m.Update(keyMsg("enter"))
+	m = n2.(FleetModel)
+	if m.ViewMode() != viewDetail {
+		t.Fatal("enter must switch to detail view")
+	}
+	if cmd == nil {
+		t.Fatal("enter must return a history-load Cmd")
+	}
+	// Execute the Cmd → it must produce a HistoryLoadedMsg for scan a.
+	msg := cmd()
+	loaded, ok := msg.(HistoryLoadedMsg)
+	if !ok || loaded.ScanID != "a" {
+		t.Fatalf("cmd must yield HistoryLoadedMsg for a, got %#v", msg)
+	}
+	n3, _ := m.Update(loaded)
+	m = n3.(FleetModel)
+	if !strings.Contains(m.View(), "queued") {
+		t.Fatalf("history must seed the detail view; got:\n%s", m.View())
+	}
+}
+
+func TestLiveEventAppendsToDetailWithDedup(t *testing.T) {
+	loader := &fakeLoader{events: []*v1.StatusEvent{{ScanId: "a", Timestamp: 1, State: v1.ScanState_PENDING}}}
+	m := NewFleetModel().WithClient(loader)
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 1}})
+	m = n.(FleetModel)
+	n2, cmd := m.Update(keyMsg("enter"))
+	m = n2.(FleetModel)
+	m2, _ := m.Update(cmd().(HistoryLoadedMsg))
+	m = m2.(FleetModel)
+	// A new live event with a fresh timestamp appends.
+	n3, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 2, Message: "walking"}})
+	m = n3.(FleetModel)
+	if !strings.Contains(m.View(), "walking") {
+		t.Fatalf("live event must append to detail history; got:\n%s", m.View())
+	}
+}
+
+func TestEscReturnsToListPreservingCursor(t *testing.T) {
+	loader := &fakeLoader{}
+	m := NewFleetModel().WithClient(loader)
+	for _, id := range []string{"a", "b", "c"} {
+		n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: id, State: v1.ScanState_RUNNING, Timestamp: 1}})
+		m = n.(FleetModel)
+	}
+	d, _ := m.Update(keyMsg("down")) // cursor -> 1
+	m = d.(FleetModel)
+	e, _ := m.Update(keyMsg("enter"))
+	m = e.(FleetModel)
+	b, _ := m.Update(keyMsg("esc"))
+	m = b.(FleetModel)
+	if m.ViewMode() != viewList {
+		t.Fatal("esc must return to list")
+	}
+	if m.Cursor() != 1 {
+		t.Fatalf("cursor must be preserved at 1, got %d", m.Cursor())
+	}
+}
+
+func TestDetailIgnoresFoldRejectedEvent(t *testing.T) {
+	loader := &fakeLoader{events: []*v1.StatusEvent{{ScanId: "a", Timestamp: 5, State: v1.ScanState_COMPLETED}}}
+	m := NewFleetModel().WithClient(loader)
+	// Seed a terminal COMPLETED at ts=5.
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_COMPLETED, Timestamp: 5}})
+	m = n.(FleetModel)
+	// Drill in; load history (1 event).
+	e, cmd := m.Update(keyMsg("enter"))
+	m = e.(FleetModel)
+	m2, _ := m.Update(cmd().(HistoryLoadedMsg))
+	m = m2.(FleetModel)
+	before := len(m.detail.history)
+	// A stale RUNNING at older ts=2 — fold MUST reject (terminal-sticky + older ts).
+	n3, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 2}})
+	m = n3.(FleetModel)
+	if len(m.detail.history) != before {
+		t.Fatalf("fold-rejected event must not append to detail; before=%d after=%d", before, len(m.detail.history))
 	}
 }
