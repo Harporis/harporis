@@ -28,6 +28,17 @@ func TestCompareColumn(t *testing.T) {
 	if compareColumn(a, b, sortUpdated) >= 0 {
 		t.Fatal("ts 1<2")
 	}
+	if compareColumn(a, b, sortSource) >= 0 {
+		t.Fatal(`"github" < "gitlab" by source`)
+	}
+	done := mkScan("d", v1.ScanState_COMPLETED, 3, 0, 0, "src")
+	// "COMPLETED" < "RUNNING" lexicographically
+	if compareColumn(done, a, sortState) >= 0 {
+		t.Fatal(`"COMPLETED" < "RUNNING" by state`)
+	}
+	if compareColumn(a, done, sortState) <= 0 {
+		t.Fatal(`"RUNNING" > "COMPLETED" by state`)
+	}
 }
 
 func TestSortColumnNextCycles(t *testing.T) {
