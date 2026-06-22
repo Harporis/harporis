@@ -76,10 +76,10 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		if m.filtering {
-			return m.updateFilterInput(v) // defined in Task 4
+			return m.updateFilterInput(v)
 		}
 		if m.view == viewDetail {
-			return m.updateDetailKey(v) // defined in Task 6
+			return m.updateDetailKey(v)
 		}
 		return m.updateListKey(v)
 	case fleetTickMsg:
@@ -97,13 +97,16 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StatusEventMsg:
 		ev := v.Ev
 		prev, ok := m.scans[ev.ScanId]
+		accepted := false
 		if !ok {
 			m.scans[ev.ScanId] = ev
 			m.evictIfOver() // only a new scan_id can grow the map
+			accepted = true
 		} else if !(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
 			m.scans[ev.ScanId] = ev
+			accepted = true
 		}
-		if m.view == viewDetail && ev.ScanId == m.detail.scanID {
+		if accepted && m.view == viewDetail && ev.ScanId == m.detail.scanID {
 			m.detail.latest = ev
 			m.detail.appendEvent(ev)
 		}
@@ -255,7 +258,7 @@ func (m FleetModel) View() string {
 		return ui.BoxStyle.Render("error: " + m.err.Error())
 	}
 	if m.view == viewDetail {
-		return m.viewDetailString() // defined in Task 5
+		return m.viewDetailString()
 	}
 	return m.viewListString()
 }
@@ -352,8 +355,8 @@ func (m FleetModel) updateFilterInput(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.clampCursor()
 		return m, nil
 	case "backspace":
-		if n := len(m.filterInput); n > 0 {
-			m.filterInput = m.filterInput[:n-1]
+		if r := []rune(m.filterInput); len(r) > 0 {
+			m.filterInput = string(r[:len(r)-1])
 		}
 		return m, nil
 	default:

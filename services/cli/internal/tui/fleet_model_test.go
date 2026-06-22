@@ -327,3 +327,23 @@ func TestEscReturnsToListPreservingCursor(t *testing.T) {
 		t.Fatalf("cursor must be preserved at 1, got %d", m.Cursor())
 	}
 }
+
+func TestDetailIgnoresFoldRejectedEvent(t *testing.T) {
+	loader := &fakeLoader{events: []*v1.StatusEvent{{ScanId: "a", Timestamp: 5, State: v1.ScanState_COMPLETED}}}
+	m := NewFleetModel().WithClient(loader)
+	// Seed a terminal COMPLETED at ts=5.
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_COMPLETED, Timestamp: 5}})
+	m = n.(FleetModel)
+	// Drill in; load history (1 event).
+	e, cmd := m.Update(keyMsg("enter"))
+	m = e.(FleetModel)
+	m2, _ := m.Update(cmd().(HistoryLoadedMsg))
+	m = m2.(FleetModel)
+	before := len(m.detail.history)
+	// A stale RUNNING at older ts=2 — fold MUST reject (terminal-sticky + older ts).
+	n3, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 2}})
+	m = n3.(FleetModel)
+	if len(m.detail.history) != before {
+		t.Fatalf("fold-rejected event must not append to detail; before=%d after=%d", before, len(m.detail.history))
+	}
+}
