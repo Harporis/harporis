@@ -185,3 +185,68 @@ func TestClampCursorEmptyVisibleSet(t *testing.T) {
 		t.Fatalf("cursor must never be negative, got %d", m.Cursor())
 	}
 }
+
+func TestSortKeysCycleAndReverse(t *testing.T) {
+	m := NewFleetModel()
+	s1, _ := m.Update(keyMsg("s"))
+	col, rev, explicit := s1.(FleetModel).SortState()
+	if !explicit || col != sortScanID || rev {
+		t.Fatalf("first s: want explicit ScanID asc, got col=%d rev=%v explicit=%v", col, rev, explicit)
+	}
+	s2, _ := s1.(FleetModel).Update(keyMsg("s"))
+	col, _, _ = s2.(FleetModel).SortState()
+	if col != sortState {
+		t.Fatalf("second s: want STATE, got %d", col)
+	}
+	rev1, _ := s2.(FleetModel).Update(keyMsg("S"))
+	_, rev, _ = rev1.(FleetModel).SortState()
+	if !rev {
+		t.Fatal("S must toggle reverse")
+	}
+}
+
+func TestFilterInputApplies(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(keyMsg("/"))
+	m = n.(FleetModel)
+	if !m.Filtering() {
+		t.Fatal("/ must enter filter mode")
+	}
+	for _, ch := range []string{"s", "t", "a", "t", "e", ":", "r", "u", "n"} {
+		n, _ = m.Update(keyMsg(ch))
+		m = n.(FleetModel)
+	}
+	n, _ = m.Update(keyMsg("enter"))
+	m = n.(FleetModel)
+	if m.Filtering() {
+		t.Fatal("enter must leave filter mode")
+	}
+	if m.FilterRaw() != "state:run" {
+		t.Fatalf("filter not applied, got %q", m.FilterRaw())
+	}
+}
+
+func TestFilterInputUnknownKeyShowsError(t *testing.T) {
+	m := NewFleetModel()
+	n, _ := m.Update(keyMsg("/"))
+	m = n.(FleetModel)
+	for _, ch := range []string{"x", ":", "y"} {
+		n, _ = m.Update(keyMsg(ch))
+		m = n.(FleetModel)
+	}
+	n, _ = m.Update(keyMsg("enter"))
+	m = n.(FleetModel)
+	if !strings.Contains(m.View(), "filter error") {
+		t.Fatalf("invalid filter must surface an error in the view; got:\n%s", m.View())
+	}
+}
+
+func TestHeaderShowsSortIndicator(t *testing.T) {
+	m := NewFleetModel()
+	nn, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 1}})
+	m = nn.(FleetModel)
+	s1, _ := m.Update(keyMsg("s")) // explicit ScanID asc
+	if !strings.Contains(s1.(FleetModel).View(), "SCAN_ID↑") {
+		t.Fatalf("active sort column must show ↑; got:\n%s", s1.(FleetModel).View())
+	}
+}

@@ -7,13 +7,12 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 )
 
-const fleetFooter = "q quit · f filter active"
+const fleetFooter = "↑↓ move · enter open · s/S sort · / filter · f active · q quit"
 
 // maxFleetScans bounds the in-memory scan map so a long-lived `harporis
 // watch` session on a busy fleet cannot grow without limit. Community
@@ -119,6 +118,24 @@ func (m FleetModel) updateListKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "f":
 		m.activeOnly = !m.activeOnly
 		m.clampCursor()
+	case "s":
+		if !m.sortExplicit {
+			m.sortExplicit = true
+			m.sortCol = sortScanID
+		} else {
+			m.sortCol = m.sortCol.next()
+		}
+		m.clampCursor()
+	case "S":
+		if !m.sortExplicit {
+			m.sortExplicit = true
+			m.sortCol = sortScanID
+		}
+		m.sortRev = !m.sortRev
+	case "/":
+		m.filtering = true
+		m.filterInput = m.filter.Raw()
+		m.filterErr = ""
 	}
 	return m, nil
 }
@@ -228,11 +245,29 @@ func (m FleetModel) viewListString() string {
 		countLabel, ui.DimStyle.Render(m.natsURL),
 		time.Now().UTC().Format("15:04:05"))
 	if len(rows) == 0 {
-		body := ui.DimStyle.Render("(no scans yet, waiting…)")
-		footer := ui.DimStyle.Render(fleetFooter)
-		return ui.BoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
+		var sb strings.Builder
+		sb.WriteString(header + "\n")
+		sb.WriteString(ui.DimStyle.Render("(no scans yet, waiting…)") + "\n")
+		if m.filtering {
+			sb.WriteString(ui.InfoStyle.Render("filter> "+m.filterInput) + "\n")
+		} else if m.filter.Raw() != "" {
+			sb.WriteString(ui.DimStyle.Render("filter: "+m.filter.Raw()) + "\n")
+		}
+		if m.filterErr != "" {
+			sb.WriteString(ui.ErrStyle.Render(m.filterErr) + "\n")
+		}
+		sb.WriteString(ui.DimStyle.Render(fleetFooter))
+		return ui.BoxStyle.Render(sb.String())
 	}
-	t := ui.NewTable("", "SCAN_ID", "STATE", "SOURCE", "CHUNKS", "SECRETS", "UPDATED")
+	t := ui.NewTable(
+		"",
+		m.columnHeader(sortScanID),
+		m.columnHeader(sortState),
+		m.columnHeader(sortSource),
+		m.columnHeader(sortChunks),
+		m.columnHeader(sortSecrets),
+		m.columnHeader(sortUpdated),
+	)
 	for i, e := range rows {
 		marker := " "
 		if i == m.cursor {
@@ -252,6 +287,14 @@ func (m FleetModel) viewListString() string {
 	var sb strings.Builder
 	sb.WriteString(header + "\n")
 	_, _ = t.WriteTo(&sb)
+	if m.filtering {
+		sb.WriteString(ui.InfoStyle.Render("filter> "+m.filterInput) + "\n")
+	} else if m.filter.Raw() != "" {
+		sb.WriteString(ui.DimStyle.Render("filter: "+m.filter.Raw()) + "\n")
+	}
+	if m.filterErr != "" {
+		sb.WriteString(ui.ErrStyle.Render(m.filterErr) + "\n")
+	}
 	sb.WriteString(ui.DimStyle.Render(fleetFooter))
 	return ui.BoxStyle.Render(sb.String())
 }
@@ -265,9 +308,54 @@ func agoString(unix int64) string {
 	return d.String() + " ago"
 }
 
-// Temporary stubs — replaced by Tasks 4–6.
+func (m FleetModel) updateFilterInput(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.String() {
+	case "esc":
+		m.filtering = false
+		m.filterErr = ""
+		return m, nil
+	case "enter":
+		f, err := ParseFilter(m.filterInput)
+		if err != nil {
+			m.filterErr = "filter error: " + err.Error()
+			return m, nil
+		}
+		m.filter = f
+		m.filtering = false
+		m.filterErr = ""
+		m.clampCursor()
+		return m, nil
+	case "backspace":
+		if n := len(m.filterInput); n > 0 {
+			m.filterInput = m.filterInput[:n-1]
+		}
+		return m, nil
+	default:
+		if len(v.Runes) > 0 {
+			m.filterInput += string(v.Runes)
+		}
+		return m, nil
+	}
+}
+
+func (m FleetModel) columnHeader(c sortColumn) string {
+	h := c.label()
+	if m.sortExplicit && m.sortCol == c {
+		if m.sortRev {
+			return h + "↓"
+		}
+		return h + "↑"
+	}
+	return h
+}
+
+// Test accessors.
+func (m FleetModel) SortState() (sortColumn, bool, bool) { return m.sortCol, m.sortRev, m.sortExplicit }
+func (m FleetModel) Filtering() bool                     { return m.filtering }
+func (m FleetModel) FilterRaw() string                   { return m.filter.Raw() }
+
+// Temporary stubs — replaced by Tasks 5–6.
 const viewDetail viewMode = 1
 
-func (m FleetModel) viewDetailString() string                          { return "" }
-func (m FleetModel) updateDetailKey(tea.KeyMsg) (tea.Model, tea.Cmd)  { return m, nil }
-func (m FleetModel) updateFilterInput(tea.KeyMsg) (tea.Model, tea.Cmd) { return m, nil }
+func (m FleetModel) viewDetailString() string                         { return "" }
+func (m FleetModel) updateDetailKey(tea.KeyMsg) (tea.Model, tea.Cmd) { return m, nil }
