@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -63,6 +64,25 @@ func TestFindingsLoadingAndErrorAndEmpty(t *testing.T) {
 	}
 	if !strings.Contains((findingsState{loaded: nil}).view(20), "no findings") {
 		t.Fatal("empty loaded must render '(no findings)'")
+	}
+}
+
+func TestFindingsViewportFollowsCursor(t *testing.T) {
+	var fs []findings.Finding
+	for i := 0; i < 30; i++ {
+		fs = append(fs, findings.Finding{Severity: "HIGH", RuleID: "r", FilePath: fmt.Sprintf("f%02d.go", i), LineNumber: 1})
+	}
+	s := findingsState{loaded: fs}
+	const h = 16 // pageSize(16) = 6 per the impl (height-10)
+	for i := 0; i < 20; i++ {
+		s, _ = s.updateKey(tea.KeyMsg{Type: tea.KeyDown}, h)
+	}
+	ps := s.pageSize(h)
+	if s.offset == 0 {
+		t.Fatalf("offset must advance once cursor passes the first page; cursor=%d offset=%d ps=%d", s.cursor, s.offset, ps)
+	}
+	if s.cursor < s.offset || s.cursor >= s.offset+ps {
+		t.Fatalf("cursor %d must stay within viewport [%d,%d)", s.cursor, s.offset, s.offset+ps)
 	}
 }
 

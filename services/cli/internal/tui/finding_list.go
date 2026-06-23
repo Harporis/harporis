@@ -61,7 +61,10 @@ func (s findingsState) visible() []findings.Finding {
 
 func (s *findingsState) clampCursor() {
 	n := len(s.visible())
-	if n > 0 && s.cursor >= n {
+	if n == 0 {
+		s.cursor = 0
+		s.offset = 0
+	} else if s.cursor >= n {
 		s.cursor = n - 1
 	}
 	if s.cursor < 0 {
@@ -131,6 +134,16 @@ func (s findingsState) updateKey(v tea.KeyMsg, height int) (findingsState, bool)
 		s.filtering = true
 		s.filterInput = s.filter.Raw()
 		s.filterErr = ""
+	}
+	ps := s.pageSize(height)
+	if s.cursor < s.offset {
+		s.offset = s.cursor
+	}
+	if ps > 0 && s.cursor >= s.offset+ps {
+		s.offset = s.cursor - ps + 1
+	}
+	if s.offset < 0 {
+		s.offset = 0
 	}
 	return s, false
 }
