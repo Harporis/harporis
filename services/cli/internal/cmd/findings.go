@@ -435,11 +435,10 @@ func renderPrettyFindings(r io.Reader, w io.Writer) error {
 	return tw.Flush()
 }
 
-// parseNDJSON decodes the writer's NDJSON output into findings.Finding
-// values, skipping blank lines. Lines that fail to unmarshal are
-// returned as zero-value entries with ScanID == "" so callers can
-// surface them with a "parse-error" row instead of aborting the whole
-// render. Returns the bufio.Scanner error if the stream itself broke.
+// parseNDJSON decodes the writer's NDJSON into []findings.Finding, emitting a
+// {RuleID:"parse-error", Severity:"?"} sentinel row for each malformed line so
+// the json/csv/md renderers surface bad lines. This DELIBERATELY differs from
+// findings.Parse (which silently skips malformed lines) — do not collapse them.
 func parseNDJSON(r io.Reader) ([]findings.Finding, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)

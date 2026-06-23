@@ -104,6 +104,7 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detail.findings.err = v.Err
 			} else {
 				m.detail.findings.loaded = v.Findings
+				m.detail.findings.loadedOnce = true
 			}
 		}
 		return m, nil
@@ -496,7 +497,7 @@ func (m FleetModel) updateDetailKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab", "left", "right":
 		if m.detail.tab == tabStatus {
 			m.detail.tab = tabFindings
-			if !m.detail.findings.loading && m.detail.findings.loaded == nil && m.detail.findings.err == nil {
+			if !m.detail.findings.loading && !m.detail.findings.loadedOnce && m.detail.findings.err == nil {
 				m.detail.findings.loading = true
 				return m, m.loadFindingsCmd(m.detail.scanID)
 			}

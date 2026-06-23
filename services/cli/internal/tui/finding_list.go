@@ -14,6 +14,7 @@ import (
 type findingsState struct {
 	loaded       []findings.Finding
 	loading      bool
+	loadedOnce   bool
 	err          error
 	cursor       int
 	offset       int

@@ -65,10 +65,12 @@ type fakeFindingsLoader struct {
 	out    []findings.Finding
 	err    error
 	called string
+	calls  int
 }
 
 func (f *fakeFindingsLoader) Load(scanID string) ([]findings.Finding, error) {
 	f.called = scanID
+	f.calls++
 	return f.out, f.err
 }
 
@@ -122,5 +124,40 @@ func TestDetailChangingScanResetsTab(t *testing.T) {
 	m = e2.(FleetModel)
 	if m.detail.tab != tabStatus {
 		t.Fatal("a fresh drill-in must reset to Status tab")
+	}
+}
+
+func TestFindingsEmptyResultCachedNoReload(t *testing.T) {
+	loader := &fakeFindingsLoader{out: nil} // empty result
+	m := NewFleetModel().WithClient(&fakeLoader{}).WithFindingsLoader(loader)
+	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_COMPLETED, Timestamp: 1}})
+	m = n.(FleetModel)
+	e, _ := m.Update(keyMsg("enter"))
+	m = e.(FleetModel)
+	// First Findings entry -> must emit a load cmd.
+	tb, cmd := m.Update(keyMsg("tab"))
+	m = tb.(FleetModel)
+	if cmd == nil {
+		t.Fatal("first Findings entry must load")
+	}
+	// Execute the cmd to get FindingsLoadedMsg and apply it (empty result).
+	loaded, ok := cmd().(FindingsLoadedMsg)
+	if !ok {
+		t.Fatalf("cmd must yield FindingsLoadedMsg, got %T", cmd())
+	}
+	m2, _ := m.Update(loaded)
+	m = m2.(FleetModel)
+	if loader.calls != 1 {
+		t.Fatalf("loader must be called exactly once after first tab entry, got %d", loader.calls)
+	}
+	// Back to Status tab, then to Findings again -> must NOT reload.
+	back, _ := m.Update(keyMsg("tab"))
+	m = back.(FleetModel)
+	_, cmd2 := m.Update(keyMsg("tab"))
+	if cmd2 != nil {
+		t.Fatal("empty findings result must be cached; second Findings entry must not reload")
+	}
+	if loader.calls != 1 {
+		t.Fatalf("loader must still be called exactly once after second tab entry, got %d", loader.calls)
 	}
 }

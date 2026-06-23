@@ -69,7 +69,13 @@ func (m FleetModel) viewDetailString() string {
 	} else {
 		body = m.viewDetailStatusBody()
 	}
-	footer := ui.DimStyle.Render("tab switch · ↑/↓ scroll · / filter · s/S sort · esc back · q quit")
+	var footerStr string
+	if d.tab == tabFindings {
+		footerStr = "tab switch · ↑/↓ move · / filter · s/S sort · esc back · q quit"
+	} else {
+		footerStr = "tab switch · ↑/↓ scroll · esc back · q quit"
+	}
+	footer := ui.DimStyle.Render(footerStr)
 	return ui.BoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, tabs, body, footer))
 }
 
