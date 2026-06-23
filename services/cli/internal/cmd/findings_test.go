@@ -97,9 +97,12 @@ func TestRenderPrettyFindings_TableShapeAndDecodedSecret(t *testing.T) {
 }
 
 func TestRenderPrettyFindings_HandlesEmptyAndMalformed(t *testing.T) {
+	// "not json {{{"  is clearly not valid base64, so the old buggy path
+	// (DecodeAndPreview) would have appended " (raw)". The fixed path
+	// (TruncateLine) must NOT append that suffix.
 	const ndjson = `
 
-{this is not json}
+not json {{{
 {"scan_id":"s","rule_id":"r","severity":"LOW"}
 `
 	var buf bytes.Buffer
@@ -109,6 +112,9 @@ func TestRenderPrettyFindings_HandlesEmptyAndMalformed(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "parse-error") {
 		t.Errorf("malformed line should surface as parse-error row: %q", out)
+	}
+	if strings.Contains(out, "(raw)") {
+		t.Errorf("parse-error row must NOT contain '(raw)' suffix: %q", out)
 	}
 	if !strings.Contains(out, "LOW") {
 		t.Errorf("valid line after malformed should still render: %q", out)

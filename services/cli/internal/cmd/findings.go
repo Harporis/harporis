@@ -413,7 +413,7 @@ func renderPrettyFindings(r io.Reader, w io.Writer) error {
 		}
 		var f findings.Finding
 		if err := json.Unmarshal([]byte(line), &f); err != nil {
-			fmt.Fprintf(tw, "?\tparse-error\t-\t%s\n", findings.DecodeAndPreview(line, 48))
+			fmt.Fprintf(tw, "?\tparse-error\t-\t%s\n", findings.TruncateLine(line, 48))
 			count++
 			continue
 		}

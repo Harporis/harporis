@@ -103,8 +103,13 @@ func DecodeAndPreview(b64 string, max int) string {
 	return truncSecret(string(raw), max)
 }
 
+// TruncateLine sanitizes and clips s to max printable chars, without any
+// base64 decoding — used to display a raw (e.g. malformed) line.
+func TruncateLine(s string, max int) string { return truncSecret(s, max) }
+
 func truncSecret(s string, max int) string {
 	var b strings.Builder
+	b.Grow(min(len(s), max))
 	for i, r := range s {
 		if i >= max {
 			b.WriteString("…")
