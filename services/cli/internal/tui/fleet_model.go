@@ -50,7 +50,6 @@ type FleetModel struct {
 	detail       detailState
 	height       int
 	cl           historyLoader
-	fl           findingsLoader
 }
 
 // NewFleetModel returns an empty dashboard.
@@ -97,53 +96,20 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case FindingsLoadedMsg:
-		if m.view == viewDetail && v.ScanID == m.detail.scanID {
-			m.detail.findings.loading = false
-			if v.Err != nil {
-				m.detail.findings.err = v.Err
-			} else {
-				m.detail.findings.loaded = v.Findings
-				m.detail.findings.loadedOnce = true
-			}
-		}
-		return m, nil
 	case StatusEventMsg:
 		ev := v.Ev
 		prev, ok := m.scans[ev.ScanId]
-		// Display precedence is unchanged: a newer non-terminal-overriding
-		// event wins state/message/timestamp. Metrics, however, arrive split
-		// across producers (getter throughput on COMPLETED, scanner secrets on
-		// RUNNING), so they are ALWAYS merged field-wise (max) into the
-		// retained snapshot — even when the event loses the display race.
-		display := ev
-		accepted := true
-		if ok && !(!(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp) {
-			display = prev
-			accepted = false
-		}
-		var prevMetrics *v1.ScanMetrics
-		if ok {
-			prevMetrics = prev.GetMetrics()
-		}
-		snap := &v1.StatusEvent{
-			ScanId:       display.ScanId,
-			State:        display.State,
-			Timestamp:    display.Timestamp,
-			Message:      display.Message,
-			Source:       display.Source,
-			OutputConfig: display.GetOutputConfig(),
-			Metrics:      scanmetrics.Merge(prevMetrics, ev.GetMetrics()),
-		}
-		m.scans[ev.ScanId] = snap
+		accepted := false
 		if !ok {
 			m.evictIfOver() // only a new scan_id can grow the map
+			accepted = true
+		} else if !(IsTerminal(prev.State) && !IsTerminal(ev.State)) && ev.Timestamp >= prev.Timestamp {
+			m.scans[ev.ScanId] = ev
+			accepted = true
 		}
-		if m.view == viewDetail && ev.ScanId == m.detail.scanID {
-			m.detail.latest = snap // merged metrics + current display, always
-			if accepted {
-				m.detail.appendEvent(ev)
-			}
+		if accepted && m.view == viewDetail && ev.ScanId == m.detail.scanID {
+			m.detail.latest = ev
+			m.detail.appendEvent(ev)
 		}
 		return m, nil
 	case SubscribeErrMsg:
@@ -443,34 +409,6 @@ type HistoryLoadedMsg struct {
 // WithClient injects the history loader used on drill-in.
 func (m FleetModel) WithClient(cl historyLoader) FleetModel { m.cl = cl; return m }
 
-// findingsLoader is the interface the fleet model needs to load findings for
-// the Findings tab. An interface keeps the tui package free of a findings
-// import path and lets tests inject a fake.
-type findingsLoader interface {
-	Load(scanID string) ([]findings.Finding, error)
-}
-
-// FindingsLoadedMsg delivers the result of a Findings-tab load.
-type FindingsLoadedMsg struct {
-	ScanID   string
-	Findings []findings.Finding
-	Err      error
-}
-
-// WithFindingsLoader injects the findings loader used by the Findings tab.
-func (m FleetModel) WithFindingsLoader(l findingsLoader) FleetModel { m.fl = l; return m }
-
-func (m FleetModel) loadFindingsCmd(scanID string) tea.Cmd {
-	fl := m.fl
-	if fl == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		fs, err := fl.Load(scanID)
-		return FindingsLoadedMsg{ScanID: scanID, Findings: fs, Err: err}
-	}
-}
-
 // ViewMode exposes the current view for tests.
 func (m FleetModel) ViewMode() viewMode { return m.view }
 
@@ -486,44 +424,13 @@ func (m FleetModel) loadHistoryCmd(scanID string) tea.Cmd {
 }
 
 func (m FleetModel) updateDetailKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// While typing a findings filter, route everything to the findings state.
-	if m.detail.tab == tabFindings && m.detail.findings.filtering {
-		m.detail.findings, _ = m.detail.findings.updateKey(v, m.height)
-		return m, nil
-	}
 	switch v.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-	case "tab", "left", "right":
-		if m.detail.tab == tabStatus {
-			m.detail.tab = tabFindings
-			if !m.detail.findings.loading && !m.detail.findings.loadedOnce && m.detail.findings.err == nil {
-				m.detail.findings.loading = true
-				return m, m.loadFindingsCmd(m.detail.scanID)
-			}
-		} else {
-			m.detail.tab = tabStatus
-		}
-		return m, nil
-	}
-	if m.detail.tab == tabFindings {
-		if v.String() == "r" && (m.detail.findings.err != nil) {
-			m.detail.findings = findingsState{loading: true}
-			return m, m.loadFindingsCmd(m.detail.scanID)
-		}
-		var back bool
-		m.detail.findings, back = m.detail.findings.updateKey(v, m.height)
-		if back {
-			m.view = viewList
-			m.detail = detailState{}
-		}
-		return m, nil
-	}
-	// Status tab (unchanged behavior).
-	switch v.String() {
 	case "esc":
 		m.view = viewList
 		m.detail = detailState{}
+		return m, nil
 	case "up", "k":
 		if m.detail.offset > 0 {
 			m.detail.offset--

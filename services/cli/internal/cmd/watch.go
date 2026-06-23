@@ -188,9 +188,7 @@ func RunFleetTUI(cl *natscli.Client, natsURL, outputDir string) error {
 	}
 	defer cleanup()
 
-	p := tea.NewProgram(
-		tui.NewFleetModel().WithNATSURL(natsURL).WithClient(cl).WithFindingsLoader(findingsLoaderFunc{outputDir: outputDir}),
-		tea.WithAltScreen())
+	p := tea.NewProgram(tui.NewFleetModel().WithNATSURL(natsURL).WithClient(cl), tea.WithAltScreen())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

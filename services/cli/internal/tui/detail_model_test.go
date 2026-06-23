@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
-	"github.com/Harporis/harporis/services/cli/internal/findings"
 )
 
 func TestAppendEventDedupsByTimestampAndState(t *testing.T) {
@@ -59,105 +58,4 @@ func TestViewDetailNilLatestNoPanic(t *testing.T) {
 	m.view = viewDetail
 	m.detail = detailState{scanID: "s", latest: nil, loading: true}
 	_ = m.View() // must not panic
-}
-
-type fakeFindingsLoader struct {
-	out    []findings.Finding
-	err    error
-	called string
-	calls  int
-}
-
-func (f *fakeFindingsLoader) Load(scanID string) ([]findings.Finding, error) {
-	f.called = scanID
-	f.calls++
-	return f.out, f.err
-}
-
-func TestDetailTabSwitchLoadsFindings(t *testing.T) {
-	loader := &fakeFindingsLoader{out: []findings.Finding{{Severity: "HIGH", RuleID: "aws-access-key-id", FilePath: "x", LineNumber: 1}}}
-	m := NewFleetModel().WithClient(&fakeLoader{}).WithFindingsLoader(loader)
-	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_COMPLETED, Timestamp: 1}})
-	m = n.(FleetModel)
-	e, _ := m.Update(keyMsg("enter")) // drill in -> tabStatus
-	m = e.(FleetModel)
-	if m.detail.tab != tabStatus {
-		t.Fatal("drill-in must start on Status tab")
-	}
-	// Switch to Findings -> must emit a load Cmd.
-	tb, cmd := m.Update(keyMsg("tab"))
-	m = tb.(FleetModel)
-	if m.detail.tab != tabFindings {
-		t.Fatal("tab must switch to Findings")
-	}
-	if cmd == nil {
-		t.Fatal("first Findings entry must emit a load Cmd")
-	}
-	msg := cmd()
-	loaded, ok := msg.(FindingsLoadedMsg)
-	if !ok || loaded.ScanID != "a" {
-		t.Fatalf("cmd must yield FindingsLoadedMsg for a, got %#v", msg)
-	}
-	n2, _ := m.Update(loaded)
-	m = n2.(FleetModel)
-	if !strings.Contains(m.View(), "aws-access-key-id") {
-		t.Fatalf("findings must render after load; got:\n%s", m.View())
-	}
-}
-
-func TestDetailChangingScanResetsTab(t *testing.T) {
-	loader := &fakeFindingsLoader{}
-	m := NewFleetModel().WithClient(&fakeLoader{}).WithFindingsLoader(loader)
-	for _, id := range []string{"a", "b"} {
-		n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: id, State: v1.ScanState_RUNNING, Timestamp: 1}})
-		m = n.(FleetModel)
-	}
-	e, _ := m.Update(keyMsg("enter"))
-	m = e.(FleetModel)
-	tb, _ := m.Update(keyMsg("tab")) // go to Findings on first scan
-	m = tb.(FleetModel)
-	esc, _ := m.Update(keyMsg("esc")) // back to fleet
-	m = esc.(FleetModel)
-	d, _ := m.Update(keyMsg("down")) // move cursor to other scan
-	m = d.(FleetModel)
-	e2, _ := m.Update(keyMsg("enter")) // drill into the other scan
-	m = e2.(FleetModel)
-	if m.detail.tab != tabStatus {
-		t.Fatal("a fresh drill-in must reset to Status tab")
-	}
-}
-
-func TestFindingsEmptyResultCachedNoReload(t *testing.T) {
-	loader := &fakeFindingsLoader{out: nil} // empty result
-	m := NewFleetModel().WithClient(&fakeLoader{}).WithFindingsLoader(loader)
-	n, _ := m.Update(StatusEventMsg{Ev: &v1.StatusEvent{ScanId: "a", State: v1.ScanState_COMPLETED, Timestamp: 1}})
-	m = n.(FleetModel)
-	e, _ := m.Update(keyMsg("enter"))
-	m = e.(FleetModel)
-	// First Findings entry -> must emit a load cmd.
-	tb, cmd := m.Update(keyMsg("tab"))
-	m = tb.(FleetModel)
-	if cmd == nil {
-		t.Fatal("first Findings entry must load")
-	}
-	// Execute the cmd to get FindingsLoadedMsg and apply it (empty result).
-	loaded, ok := cmd().(FindingsLoadedMsg)
-	if !ok {
-		t.Fatalf("cmd must yield FindingsLoadedMsg, got %T", cmd())
-	}
-	m2, _ := m.Update(loaded)
-	m = m2.(FleetModel)
-	if loader.calls != 1 {
-		t.Fatalf("loader must be called exactly once after first tab entry, got %d", loader.calls)
-	}
-	// Back to Status tab, then to Findings again -> must NOT reload.
-	back, _ := m.Update(keyMsg("tab"))
-	m = back.(FleetModel)
-	_, cmd2 := m.Update(keyMsg("tab"))
-	if cmd2 != nil {
-		t.Fatal("empty findings result must be cached; second Findings entry must not reload")
-	}
-	if loader.calls != 1 {
-		t.Fatalf("loader must still be called exactly once after second tab entry, got %d", loader.calls)
-	}
 }

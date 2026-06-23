@@ -328,53 +328,6 @@ func TestEscReturnsToListPreservingCursor(t *testing.T) {
 	}
 }
 
-func TestFleetMergesSecretsAcrossEvents(t *testing.T) {
-	m := NewFleetModel()
-	send := func(fm FleetModel, ev *v1.StatusEvent) FleetModel {
-		next, _ := fm.Update(StatusEventMsg{Ev: ev})
-		return next.(FleetModel)
-	}
-	// Scanner RUNNING (secrets only, older ts), then getter COMPLETED
-	// (throughput only, secrets 0, newer ts -> wins display).
-	m = send(m, &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 1,
-		Metrics: &v1.ScanMetrics{SecretsFound: 146}})
-	m = send(m, &v1.StatusEvent{ScanId: "a", State: v1.ScanState_COMPLETED, Timestamp: 2,
-		Metrics: &v1.ScanMetrics{ChunksPublished: 284}})
-
-	got := m.Scans()["a"]
-	if got.State != v1.ScanState_COMPLETED {
-		t.Fatalf("display state must be COMPLETED, got %s", got.State)
-	}
-	if got.GetMetrics().GetSecretsFound() != 146 {
-		t.Fatalf("secrets must survive the merge: want 146, got %d", got.GetMetrics().GetSecretsFound())
-	}
-	if got.GetMetrics().GetChunksPublished() != 284 {
-		t.Fatalf("throughput must survive: want 284, got %d", got.GetMetrics().GetChunksPublished())
-	}
-}
-
-func TestFleetMergesSecretsArrivingAfterTerminal(t *testing.T) {
-	// A late scanner secrets event (RUNNING) after COMPLETED loses the display
-	// race but its secrets count must still be absorbed.
-	m := NewFleetModel()
-	send := func(fm FleetModel, ev *v1.StatusEvent) FleetModel {
-		next, _ := fm.Update(StatusEventMsg{Ev: ev})
-		return next.(FleetModel)
-	}
-	m = send(m, &v1.StatusEvent{ScanId: "a", State: v1.ScanState_COMPLETED, Timestamp: 2,
-		Metrics: &v1.ScanMetrics{ChunksPublished: 284}})
-	m = send(m, &v1.StatusEvent{ScanId: "a", State: v1.ScanState_RUNNING, Timestamp: 3,
-		Metrics: &v1.ScanMetrics{SecretsFound: 146}})
-
-	got := m.Scans()["a"]
-	if got.State != v1.ScanState_COMPLETED {
-		t.Fatalf("terminal must stay sticky, got %s", got.State)
-	}
-	if got.GetMetrics().GetSecretsFound() != 146 {
-		t.Fatalf("late secrets must be absorbed: want 146, got %d", got.GetMetrics().GetSecretsFound())
-	}
-}
-
 func TestDetailIgnoresFoldRejectedEvent(t *testing.T) {
 	loader := &fakeLoader{events: []*v1.StatusEvent{{ScanId: "a", Timestamp: 5, State: v1.ScanState_COMPLETED}}}
 	m := NewFleetModel().WithClient(loader)

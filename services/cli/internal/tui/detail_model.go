@@ -11,14 +11,6 @@ import (
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 )
 
-// detailTab selects which sub-panel is active in the drill-in view.
-type detailTab int
-
-const (
-	tabStatus   detailTab = iota
-	tabFindings           // = 1
-)
-
 // detailState backs the drill-in panel for a single selected scan. latest
 // holds the freshest StatusEvent (seeded from the fleet map, kept live by
 // the tail); history is the time-ordered event list seeded by ShowHistory
@@ -30,8 +22,6 @@ type detailState struct {
 	err     error
 	loading bool
 	offset  int
-	tab     detailTab
-	findings findingsState
 }
 
 // appendEvent adds ev unless an event with the same timestamp AND state is
@@ -53,7 +43,6 @@ func (m FleetModel) pageSize() int {
 	return 12
 }
 
-// viewDetailString routes to the active tab and renders the full detail panel.
 func (m FleetModel) viewDetailString() string {
 	d := m.detail
 	if d.latest == nil {
@@ -61,40 +50,9 @@ func (m FleetModel) viewDetailString() string {
 	}
 	st := d.latest.GetState().String()
 	header := fmt.Sprintf("scan %s ── %s ── %s",
-		d.scanID, ui.StateStyle(st).Render(st), ui.DimStyle.Render(d.latest.GetSource()))
-	tabs := m.detailTabsLine()
-	var body string
-	if d.tab == tabFindings {
-		body = d.findings.view(m.height)
-	} else {
-		body = m.viewDetailStatusBody()
-	}
-	var footerStr string
-	if d.tab == tabFindings {
-		footerStr = "tab switch · ↑/↓ move · / filter · s/S sort · esc back · q quit"
-	} else {
-		footerStr = "tab switch · ↑/↓ scroll · esc back · q quit"
-	}
-	footer := ui.DimStyle.Render(footerStr)
-	return ui.BoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, tabs, body, footer))
-}
-
-// detailTabsLine renders the "[Status] Findings" or "Status [Findings]" header.
-func (m FleetModel) detailTabsLine() string {
-	var status, find string
-	if m.detail.tab == tabStatus {
-		status = ui.BrandStyle.Render("[Status]")
-		find = ui.DimStyle.Render(" Findings ")
-	} else {
-		status = ui.DimStyle.Render(" Status ")
-		find = ui.BrandStyle.Render("[Findings]")
-	}
-	return status + find
-}
-
-// viewDetailStatusBody renders just the metrics + history body for the Status tab.
-func (m FleetModel) viewDetailStatusBody() string {
-	d := m.detail
+		d.scanID,
+		ui.StateStyle(st).Render(st),
+		ui.DimStyle.Render(d.latest.GetSource()))
 
 	mtr := d.latest.GetMetrics()
 	metrics := fmt.Sprintf(
@@ -128,5 +86,6 @@ func (m FleetModel) viewDetailStatusBody() string {
 		}
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, metrics, body.String())
+	footer := ui.DimStyle.Render("↑/↓ scroll · esc back · q quit")
+	return ui.BoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, metrics, body.String(), footer))
 }
