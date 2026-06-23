@@ -253,6 +253,10 @@ func buildSource(local, remoteURL string, a remoteAuth) (*v1.Source, error) {
 		if a.KnownHosts != "" {
 			kh, err := os.ReadFile(a.KnownHosts)
 			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return nil, fmt.Errorf("known_hosts file %s does not exist — generate it first, e.g.\n  ssh-keyscan %s > %s",
+						a.KnownHosts, sshHostFromURL(remoteURL), a.KnownHosts)
+				}
 				return nil, fmt.Errorf("read known_hosts %s: %w", a.KnownHosts, err)
 			}
 			ssh.KnownHosts = string(kh)
@@ -260,4 +264,21 @@ func buildSource(local, remoteURL string, a remoteAuth) (*v1.Source, error) {
 		rr.Auth = &v1.RemoteRepo_Ssh{Ssh: ssh}
 	}
 	return &v1.Source{Src: &v1.Source_Remote{Remote: rr}}, nil
+}
+
+// sshHostFromURL extracts the host from an SSH remote URL for an actionable
+// ssh-keyscan hint. Handles scp-style (git@host:path) and ssh:// URLs;
+// returns "<host>" when it cannot parse one.
+func sshHostFromURL(u string) string {
+	s := strings.TrimPrefix(u, "ssh://")
+	if at := strings.Index(s, "@"); at >= 0 {
+		s = s[at+1:]
+	}
+	if i := strings.IndexAny(s, ":/"); i >= 0 {
+		s = s[:i] // drop :path (scp-style or :port) and /path (ssh://)
+	}
+	if s == "" {
+		return "<host>"
+	}
+	return s
 }

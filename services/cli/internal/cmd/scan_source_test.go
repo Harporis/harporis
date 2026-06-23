@@ -50,6 +50,40 @@ func TestBuildSourceRemoteSSH(t *testing.T) {
 	}
 }
 
+func TestBuildSourceMissingKnownHostsActionable(t *testing.T) {
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(key, []byte("PEM-DATA"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "does-not-exist")
+	_, err := buildSource("", "git@github.com:Harporis/harporis.git",
+		remoteAuth{SSHKey: key, KnownHosts: missing})
+	if err == nil {
+		t.Fatal("expected error for missing known_hosts file")
+	}
+	// The error must be actionable: name ssh-keyscan, the host, and the path.
+	for _, want := range []string{"ssh-keyscan", "github.com", missing} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must mention %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestSSHHostFromURL(t *testing.T) {
+	cases := map[string]string{
+		"git@github.com:Harporis/harporis.git": "github.com",
+		"ssh://git@gitlab.com/grp/repo.git":    "gitlab.com",
+		"ssh://example.org:2222/x":             "example.org",
+		"":                                     "<host>",
+	}
+	for in, want := range cases {
+		if got := sshHostFromURL(in); got != want {
+			t.Errorf("sshHostFromURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestBuildSource_BasicAuth(t *testing.T) {
 	src, err := buildSource("", "https://x/r.git", remoteAuth{User: "alice", Password: "pw"})
 	if err != nil {
