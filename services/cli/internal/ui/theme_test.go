@@ -28,3 +28,13 @@ func TestStateStyleNoColorInAsciiProfile(t *testing.T) {
 		t.Fatalf("expected raw text in ascii profile, got %q", got)
 	}
 }
+
+func TestSeverityStyleKnownLevels(t *testing.T) {
+	// Must not panic and must return a usable style for each level
+	// (case-insensitive); unknown falls back without panicking.
+	for _, s := range []string{"CRITICAL", "high", "Medium", "LOW", "weird", ""} {
+		if got := SeverityStyle(s).Render(s); got == "" && s != "" {
+			t.Fatalf("SeverityStyle(%q) rendered empty", s)
+		}
+	}
+}

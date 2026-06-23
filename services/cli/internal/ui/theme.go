@@ -1,7 +1,11 @@
 // Package ui holds presentational primitives shared by all commands.
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Palette. Tuned for red-team / blue-team / synthesis brand.
 var (
@@ -38,4 +42,20 @@ func StateStyle(state string) lipgloss.Style {
 		return InfoStyle
 	}
 	return InfoStyle
+}
+
+// SeverityStyle picks a style by finding severity ("CRITICAL", "HIGH", …).
+// Case-insensitive; unknown severities fall back to DimStyle.
+func SeverityStyle(sev string) lipgloss.Style {
+	switch strings.ToUpper(sev) {
+	case "CRITICAL":
+		return ErrStyle
+	case "HIGH":
+		return WarnStyle
+	case "MEDIUM":
+		return InfoStyle
+	case "LOW":
+		return DimStyle
+	}
+	return DimStyle
 }
