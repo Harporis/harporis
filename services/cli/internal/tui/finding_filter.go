@@ -10,10 +10,10 @@ import (
 // FindingFilter is a parsed structured query over a findings list. The zero
 // value matches every finding. Build one with ParseFindingFilter.
 type FindingFilter struct {
-	severity string // substring over severity (case-insensitive)
-	rule     string // substring over rule_id
-	path     string // substring over Location()
-	text     string // bare word: substring across severity, rule, location
+	severity string   // substring over severity (case-insensitive)
+	rule     string   // substring over rule_id
+	path     string   // substring over Location()
+	text     []string // bare words: each must substring-match at least one field
 	raw      string
 }
 
@@ -27,7 +27,7 @@ func ParseFindingFilter(s string) (FindingFilter, error) {
 	for _, tok := range strings.Fields(s) {
 		k, v, ok := strings.Cut(tok, ":")
 		if !ok {
-			f.text = tok
+			f.text = append(f.text, tok)
 			continue
 		}
 		k = strings.ToLower(k)
@@ -63,8 +63,8 @@ func (f FindingFilter) Match(fd findings.Finding) bool {
 	if f.path != "" && !strings.Contains(loc, f.path) {
 		return false
 	}
-	if f.text != "" {
-		t := strings.ToLower(f.text)
+	for _, w := range f.text {
+		t := strings.ToLower(w)
 		if !strings.Contains(sev, t) && !strings.Contains(rule, t) && !strings.Contains(loc, t) {
 			return false
 		}

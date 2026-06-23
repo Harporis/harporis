@@ -51,3 +51,15 @@ func TestFindingFilterAndCombination(t *testing.T) {
 		t.Fatal("one clause failing must reject")
 	}
 }
+
+func TestFindingFilterMultipleBareWordsAnd(t *testing.T) {
+	f, _ := ParseFindingFilter("aws docs")
+	// rule contains "aws", path contains "docs" -> both satisfied
+	if !f.Match(fnd("HIGH", "aws-access-key-id", "docs/x.md")) {
+		t.Fatal("both bare words satisfied (across fields) must match")
+	}
+	// only "aws" present, "docs" absent -> reject
+	if f.Match(fnd("HIGH", "aws-access-key-id", "src/x.go")) {
+		t.Fatal("a bare word matching nothing must reject")
+	}
+}
