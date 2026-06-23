@@ -32,9 +32,10 @@ SQLite store for cross-scan SQL.
   (NDJSON / SARIF / HTML / XLSX / PDF / Parquet, plus an opt-in
   shared SQLite `findings.db`), one file per scan_id per format.
   An optional `severities` filter gates which levels are written.
-- `harporis` (CLI) — submits scans, watches single-scan or whole-fleet
-  status (`harporis watch`), and reads findings. Works from any CWD;
-  auto-discovers `NATS_TOKEN` on localhost.
+- `harporis` (CLI) — submits scans (local paths or private remotes over
+  SSH / HTTPS auth), drills into single-scan or whole-fleet status via an
+  interactive TUI (`harporis watch`), and reads findings. Works from any
+  CWD; auto-discovers `NATS_TOKEN` on localhost.
 
 ## Install in one command
 
@@ -60,6 +61,16 @@ exec $SHELL                              # pick up updated PATH + completion
 # scan any repo on your host (auto-translated via getter's read-only $HOME mount):
 harporis scan --local ~/code/my-project
 
+# scan a private remote repo over SSH (host-key pinned):
+ssh-keyscan github.com > /tmp/known_hosts
+harporis scan --remote-url git@github.com:me/private.git \
+  --remote-ssh-key ~/.ssh/id_ed25519 --remote-known-hosts /tmp/known_hosts
+
+# …or over HTTPS — Basic, Bearer, raw header, or PAT (env fallbacks too):
+harporis scan --remote-url https://gitlab.com/grp/repo.git \
+  --remote-header 'PRIVATE-TOKEN: glpat-xxxxx'        # $HARPORIS_REMOTE_HEADER
+# credentials are passed via GIT_CONFIG_* env, never argv, and redacted in logs.
+
 # only emit PDF + HTML for this scan (default: every enabled sink fires):
 harporis scan --local ~/code/my-project -f pdf,html
 
@@ -72,8 +83,12 @@ harporis findings show <scan_id> -f pdf > report.pdf
 # keep only high-signal levels at read time (works for every format):
 harporis findings show <scan_id> --severity CRITICAL,HIGH
 
-# watch the whole fleet of in-flight scans across replicas:
+# watch the whole fleet of in-flight scans across replicas (interactive TUI):
 harporis watch
+#   ↑↓ move · / filter (e.g. state:running source:github) · s/S sort · enter drill in
+#   inside a scan: tab switches Status (metrics + event history) ⇄ Findings
+#   (severity · rule · path:line · secret); / filters and s/S sorts the findings too.
+harporis watch <scan_id>          # follow a single scan to completion
 
 # tear down:
 make stack-down
