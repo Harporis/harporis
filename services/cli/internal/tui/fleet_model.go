@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/services/cli/internal/findings"
 	"github.com/Harporis/harporis/services/cli/internal/scanmetrics"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
 )
@@ -49,6 +50,7 @@ type FleetModel struct {
 	detail       detailState
 	height       int
 	cl           historyLoader
+	fl           findingsLoader
 }
 
 // NewFleetModel returns an empty dashboard.
@@ -92,6 +94,16 @@ func (m FleetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detail.err = v.Err
 			} else {
 				m.detail.history = v.Events
+			}
+		}
+		return m, nil
+	case FindingsLoadedMsg:
+		if m.view == viewDetail && v.ScanID == m.detail.scanID {
+			m.detail.findings.loading = false
+			if v.Err != nil {
+				m.detail.findings.err = v.Err
+			} else {
+				m.detail.findings.loaded = v.Findings
 			}
 		}
 		return m, nil
@@ -430,6 +442,34 @@ type HistoryLoadedMsg struct {
 // WithClient injects the history loader used on drill-in.
 func (m FleetModel) WithClient(cl historyLoader) FleetModel { m.cl = cl; return m }
 
+// findingsLoader is the interface the fleet model needs to load findings for
+// the Findings tab. An interface keeps the tui package free of a findings
+// import path and lets tests inject a fake.
+type findingsLoader interface {
+	Load(scanID string) ([]findings.Finding, error)
+}
+
+// FindingsLoadedMsg delivers the result of a Findings-tab load.
+type FindingsLoadedMsg struct {
+	ScanID   string
+	Findings []findings.Finding
+	Err      error
+}
+
+// WithFindingsLoader injects the findings loader used by the Findings tab.
+func (m FleetModel) WithFindingsLoader(l findingsLoader) FleetModel { m.fl = l; return m }
+
+func (m FleetModel) loadFindingsCmd(scanID string) tea.Cmd {
+	fl := m.fl
+	if fl == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		fs, err := fl.Load(scanID)
+		return FindingsLoadedMsg{ScanID: scanID, Findings: fs, Err: err}
+	}
+}
+
 // ViewMode exposes the current view for tests.
 func (m FleetModel) ViewMode() viewMode { return m.view }
 
@@ -445,13 +485,44 @@ func (m FleetModel) loadHistoryCmd(scanID string) tea.Cmd {
 }
 
 func (m FleetModel) updateDetailKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// While typing a findings filter, route everything to the findings state.
+	if m.detail.tab == tabFindings && m.detail.findings.filtering {
+		m.detail.findings, _ = m.detail.findings.updateKey(v, m.height)
+		return m, nil
+	}
 	switch v.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "tab", "left", "right":
+		if m.detail.tab == tabStatus {
+			m.detail.tab = tabFindings
+			if !m.detail.findings.loading && m.detail.findings.loaded == nil && m.detail.findings.err == nil {
+				m.detail.findings.loading = true
+				return m, m.loadFindingsCmd(m.detail.scanID)
+			}
+		} else {
+			m.detail.tab = tabStatus
+		}
+		return m, nil
+	}
+	if m.detail.tab == tabFindings {
+		if v.String() == "r" && (m.detail.findings.err != nil) {
+			m.detail.findings = findingsState{loading: true}
+			return m, m.loadFindingsCmd(m.detail.scanID)
+		}
+		var back bool
+		m.detail.findings, back = m.detail.findings.updateKey(v, m.height)
+		if back {
+			m.view = viewList
+			m.detail = detailState{}
+		}
+		return m, nil
+	}
+	// Status tab (unchanged behavior).
+	switch v.String() {
 	case "esc":
 		m.view = viewList
 		m.detail = detailState{}
-		return m, nil
 	case "up", "k":
 		if m.detail.offset > 0 {
 			m.detail.offset--

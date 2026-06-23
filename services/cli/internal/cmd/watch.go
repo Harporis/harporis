@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
+	"github.com/Harporis/harporis/services/cli/internal/findings"
 	"github.com/Harporis/harporis/services/cli/internal/natscli"
 	"github.com/Harporis/harporis/services/cli/internal/tui"
 	"github.com/Harporis/harporis/services/cli/internal/ui"
@@ -24,6 +25,7 @@ import (
 
 func newWatchCmd() *cobra.Command {
 	var idle time.Duration
+	var outputDir string
 	c := &cobra.Command{
 		Use:   "watch [scan-id]",
 		Short: "follow status — one scan, or the whole fleet when no id is given",
@@ -45,7 +47,7 @@ func newWatchCmd() *cobra.Command {
 					fmt.Fprintln(os.Stderr, "note: --timeout is ignored in fleet mode (no scan-id); the dashboard runs until you quit")
 				}
 				if !jsonOut && isatty.IsTerminal(os.Stdout.Fd()) {
-					return RunFleetTUI(cl, natsURL)
+					return RunFleetTUI(cl, natsURL, outputDir)
 				}
 				return StreamStatusLinesAll(cmd.OutOrStdout(), cl, jsonOut)
 			}
@@ -58,6 +60,7 @@ func newWatchCmd() *cobra.Command {
 		},
 	}
 	c.Flags().DurationVar(&idle, "timeout", 30*time.Minute, "give up if no status events arrive for this long (single-scan mode)")
+	c.Flags().StringVar(&outputDir, "output-dir", "", "read findings from a host path instead of `docker compose exec writer` (fleet drill-in Findings tab)")
 	return c
 }
 
@@ -169,16 +172,25 @@ func terminalExitCode(s v1.ScanState) error {
 	return nil
 }
 
+// findingsLoaderFunc adapts findings.Load to the tui.findingsLoader interface.
+type findingsLoaderFunc struct{ outputDir string }
+
+func (l findingsLoaderFunc) Load(scanID string) ([]findings.Finding, error) {
+	return findings.Load(scanID, l.outputDir)
+}
+
 // RunFleetTUI runs the live multi-scan dashboard until ctrl+c. It seeds
 // the table from ListHistory then tails the wildcard status stream.
-func RunFleetTUI(cl *natscli.Client, natsURL string) error {
+func RunFleetTUI(cl *natscli.Client, natsURL, outputDir string) error {
 	sub, cleanup, err := cl.SubscribeStatusAll()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	p := tea.NewProgram(tui.NewFleetModel().WithNATSURL(natsURL).WithClient(cl), tea.WithAltScreen())
+	p := tea.NewProgram(
+		tui.NewFleetModel().WithNATSURL(natsURL).WithClient(cl).WithFindingsLoader(findingsLoaderFunc{outputDir: outputDir}),
+		tea.WithAltScreen())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
