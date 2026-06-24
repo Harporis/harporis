@@ -14,6 +14,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -24,6 +25,13 @@ import (
 	v1 "github.com/Harporis/harporis/contracts/gen/go/harporis/v1"
 	"github.com/Harporis/harporis/kit/nats/wire"
 )
+
+// msgFetcher is the subset of *nats.Subscription that the status loop needs.
+// Pulling it out as an interface lets the fetch/backoff loop be unit-tested
+// without a live JetStream server. *natsclient.Subscription satisfies it.
+type msgFetcher interface {
+	Fetch(batch int, opts ...natsclient.PullOpt) ([]*natsclient.Msg, error)
+}
 
 // TerminalHandler is invoked for every terminal-state StatusEvent the
 // writer observes. Implementations are expected to be quick — heavy
@@ -61,21 +69,55 @@ func (c *StatusConsumer) Drain() error { return c.sub.Drain() }
 // terminal-state event observed. Non-terminal states (PENDING /
 // RUNNING) are silently Ack'd without touching the handler.
 func (c *StatusConsumer) Run(ctx context.Context, onTerminal TerminalHandler) error {
+	return runStatusLoop(ctx, c.sub, onTerminal, time.After)
+}
+
+// runStatusLoop is the testable core of Run. `after` is time.After in
+// production; tests inject a fake to assert backoff without sleeping.
+//
+// Non-timeout fetch errors (notably ErrNoResponders, returned *immediately*
+// when the JetStream consumer/stream has gone away) must back off. Without it
+// the loop hot-spins and floods the container's json log — observed filling
+// the host disk with hundreds of GB. Mirror kit/nats/pullconsumer: exponential
+// backoff capped at 5s, reset on the next good fetch or benign timeout.
+func runStatusLoop(ctx context.Context, sub msgFetcher, onTerminal TerminalHandler, after func(time.Duration) <-chan time.Time) error {
+	var backoff time.Duration
+	const maxBackoff = 5 * time.Second
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		msgs, err := c.sub.Fetch(16, natsclient.MaxWait(5*time.Second))
+		msgs, err := sub.Fetch(16, natsclient.MaxWait(5*time.Second))
 		if err != nil {
-			if err == natsclient.ErrTimeout {
+			if errors.Is(err, natsclient.ErrTimeout) {
+				backoff = 0
 				continue
 			}
 			if ctx.Err() != nil {
 				return nil
 			}
-			slog.Warn("status fetch error", "err", err)
+			if errors.Is(err, natsclient.ErrBadSubscription) ||
+				errors.Is(err, natsclient.ErrConnectionClosed) ||
+				errors.Is(err, natsclient.ErrConnectionDraining) {
+				return nil
+			}
+			slog.Warn("status fetch error", "err", err, "backoff_ms", backoff.Milliseconds())
+			if backoff == 0 {
+				backoff = 100 * time.Millisecond
+			} else {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-after(backoff):
+			}
 			continue
 		}
+		backoff = 0
 		for _, msg := range msgs {
 			var evt v1.StatusEvent
 			if perr := proto.Unmarshal(msg.Data, &evt); perr != nil {
